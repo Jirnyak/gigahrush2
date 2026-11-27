@@ -1179,12 +1179,16 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
         static thread_local std::vector<CellBins::Near> nearBuf;
         static thread_local std::vector<Entity> bubbleRoots;
         const std::uint32_t budgetN = presence_budget_n(kRagdollPresence);
-        nearBuf.resize(budgetN);
+        const std::uint32_t outCap =
+            presence_forced_infinite()
+                ? static_cast<std::uint32_t>(chainBins.entries.size())
+                : budgetN;
+        nearBuf.resize(outCap);
         const std::uint32_t got =
-            budgetN == 0
+            outCap == 0
                 ? 0u
                 : presence_query(kRagdollPresence, chainBins, reg,
-                                 nearBuf.data(), budgetN);
+                                 nearBuf.data(), outCap);
         stats.chainsInBubble = got;
         bubbleRoots.clear();
         for (std::uint32_t i = 0; i < got; ++i)
@@ -2079,6 +2083,15 @@ std::uint32_t rigid_wake_dirty_cells(Registry& reg, LayerId layer,
         ++woken;
     }
     return woken;
+}
+
+void rigid_wake_body(Registry& reg, Entity e) {
+    if (e == entt::null || !reg.valid(e) || !reg.all_of<RigidBody>(e)) return;
+    RigidBody& rb = reg.get<RigidBody>(e);
+    rb.asleep = false;
+    rb.sleepTicks = 0;
+    rb.suspended = false;
+    rb.quietTicks = 0;
 }
 
 } // namespace giga

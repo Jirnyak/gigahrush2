@@ -621,6 +621,7 @@ shared uint sFree;     // БЕЗмасочная подвижная матери
                        // неулёгшееся рыхлое) — класс 3 (мост рендера)
 shared uint sMaskBits;
 shared uint sLaid;     // биты, выставленные улёгшемуся в этом подтике (S16.10)
+shared uint sLightPass; // бит 2 класс-байта: твёрдый light-pass атом (стекло/неон)
 
 void run_settle(uint slot, uint threadId) {
     uint ci = uListA[slot];
@@ -658,7 +659,7 @@ void run_settle(uint slot, uint threadId) {
         return;
     }
     if (threadId == 0u) {
-        sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sLaid = 0u;
+        sQuanta = 0u; sFree = 0u; sMaskBits = 0u; sLaid = 0u; sLightPass = 0u;
     }
     barrier();
 
@@ -709,13 +710,15 @@ void run_settle(uint slot, uint threadId) {
     barrier();
     bool maskEmpty = sMaskBits == 0u;
 
-    uint quanta = 0u, freeQ = 0u;
+    uint quanta = 0u, freeQ = 0u, lightPass = 0u;
     for (uint k = 0u; k < 8u; ++k) {
         uint bit = threadId * 8u + k;
         bool m = ((mbyte >> k) & 1u) != 0u;
         uint mat;
         if (pg == kNoPage) mat = maskEmpty ? cell_type(ci) : 0u;
         else mat = page_atom(pg, bit);
+        if (m && mat != 0u && kMatLightPass[mat] != 0u)
+            lightPass = 1u;
         if (mat != 0u &&
             (kMatMedium[mat].x > 0.0 || kMatMedium[mat].y > 0.0)) {
             quanta += 1u;
@@ -724,19 +727,21 @@ void run_settle(uint slot, uint threadId) {
     }
     atomicAdd(sQuanta, quanta);
     atomicAdd(sFree, freeQ);
+    if (lightPass != 0u) atomicOr(sLightPass, 1u);
     barrier();
 
     if (threadId != 0u) return;
 
-    // Класс-байт — мост рендера: 3 = «частичная С МАТЕРИЕЙ СРЕД».
+    // Класс-байт — мост рендера: bits 0..1 = 0..3, bit 2 = kClassLightPass.
     uint cls;
     if (sMaskBits == 512u) cls = 1u;
     else if (sFree > 0u) cls = 3u;
     else cls = sMaskBits > 0u ? 2u : 0u;
+    if (sLightPass != 0u) cls |= 4u;
     uint shift = (ci & 3u) * 8u;
-    atomicAnd(uClass[ci >> 2], ~(0x03u << shift));
+    atomicAnd(uClass[ci >> 2], ~(0x07u << shift));
     atomicOr(uClass[ci >> 2], cls << shift);
-    if (cls != 0u) occ_set(ci);
+    if ((cls & 3u) != 0u) occ_set(ci);
     else occ_clear(ci);
 
     atomicAdd(uCnt[8], min(sQuanta, 512u));

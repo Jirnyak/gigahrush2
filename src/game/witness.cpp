@@ -6,6 +6,7 @@
 #include "core/tick.h"      // kSimHz — каданс выцветания репутации
 #include "core/wrap.h"
 #include "ecs/components.h" // Transform
+#include "game/combat.h"    // Dead, Corpse — мёртвые не свидетели
 #include "game/embody.h"    // NpcRef
 #include "game/noise.h"     // kNoiseRadiusCap — кап радиуса слуха свидетеля
 #include "world/los.h"      // sub_march — зрение свидетеля
@@ -42,9 +43,9 @@ void cell_of(std::uint32_t c, int& x, int& y, int& z) {
 
 void deed_publish(EventBus& bus, VerbId verb, Entity actor, NpcId victim,
                   const vec3& pos, std::uint64_t tick) {
-    const int cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    const int cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    const int cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    const int cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    const int cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    const int cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
     const std::uint32_t c = (static_cast<std::uint32_t>(verb) << 24) |
                             (static_cast<std::uint32_t>(cz) << 16) |
                             (static_cast<std::uint32_t>(cy) << 8) |
@@ -132,10 +133,11 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
         auto view = reg.view<const NpcRef, const Transform>();
         for (auto w : view) {
             if (w == actor) continue;
+            if (reg.any_of<Dead, Corpse>(w)) continue;
             const Transform& tr = view.get<const Transform>(w);
             if (tr.layer != layer) continue;
             const NpcId wid = view.get<const NpcRef>(w).id;
-            if (!pool.valid(wid)) continue;
+            if (!pool.valid(wid) || !pool.alive(wid)) continue;
 
             // Исходо-эквивалентная отсечка ДО дистанции и луча (§66, дешёвая
             // половина — sound-field.md инкремент C): строка матрицы решается

@@ -337,30 +337,24 @@ std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(
     //   2. GEOMETRY  — restored from the floor's snapshot if it was ever
     //                  visited, generated from (seed, number) if it was not.
     //                  One or the other, never both.
-    //   3. RULES     — always, on top of whichever geometry step ran: fluids and
-    //                  seeded content, so a revisited floor gets its water back
-    //                  even though the snapshot carries geometry only.
-    //
-    // Generation and rules used to be fused inside the module generator, which is
-    // what forced a visited floor to be BUILT before its snapshot could be laid
-    // over it — 126 ms of voxels written and immediately overwritten, and worse,
-    // the ordering bug that hung lamps in mid-air ([problems.md] §42). Now the
-    // fork is literal: a visited floor is its snapshot plus its module's rules.
-    //
-    // Timings are printed because which half costs what was folklore until it was
-    // measured: generate ~130 ms against a ~6.4 s snapshot read on this floor.
+    //   3. RULES     — run ONLY on a fresh floor (!restored): since fluid
+    //                  became kMatWater sub-voxels in MacroGrid/sub_material,
+    //                  the snapshot and delta ALREADY hold its modified state
+    //                  (save.cpp includes floor_apply_rules in the delta
+    //                  baseline). Re-running rules on restored refilled
+    //                  drained sumps.
     const auto t0 = std::chrono::steady_clock::now();
     floor_declare_rules(w, number, floor_spec(kind), seed);
 
     const auto t1 = std::chrono::steady_clock::now();
     const bool restored = restore_ && restore_(w, number);
     const auto t2 = std::chrono::steady_clock::now();
-    if (!restored)
+    if (!restored) {
         generate_floor(w, number, floor_spec(kind), seed);
+        floor_apply_rules(w, number, floor_spec(kind), seed);
+    }
     const auto t3 = std::chrono::steady_clock::now();
-
-    floor_apply_rules(w, number, floor_spec(kind), seed);
-    const auto t4 = std::chrono::steady_clock::now();
+    const auto t4 = t3;
 
     // ОБХОД РОЖДЕНИЯ — здесь, потому что содержимое этажа только что стало
     // окончательным, и ОБЕИМИ ветками: вопрос «что в этой клетке» не зависит

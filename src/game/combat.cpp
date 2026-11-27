@@ -363,7 +363,8 @@ std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
                               std::uint64_t tick, NoiseField* noise,
                               DeathCauses* causes) {
     // Collect before destroying: mutating while iterating a view invalidates it.
-    std::vector<Entity> doomed;
+    static thread_local std::vector<Entity> doomed;
+    doomed.clear();
     for (auto e : reg.view<const Dead>()) doomed.push_back(e);
 
     // ПРИЧИНЫ — ПРЕД-ПРОХОДОМ (довод в заголовке): цикл ниже меняет убийц
@@ -465,10 +466,13 @@ std::uint32_t finalize_deaths(Registry& reg, const LevelStack& stack,
             if (const Transform* vt = reg.try_get<Transform>(e))
                 deed_publish(bus, kVerbKill, d.killer, victim, vt->pos, tick);
 
-        // Player / camera holder entities are destroyed for body swapping
+        // Носитель камеры становится обычным лутаемым трупом (инвентарь
+        // высыпается тем же путём, что у NPC/моба), а смена тела в `main.cpp`
+        // определяется по отсутствию живого `CameraTag` на `player`.
         if (reg.all_of<CameraTag>(e)) {
-            reg.destroy(e);
-            continue;
+            reg.remove<CameraTag, Controller>(e);
+            if (reg.all_of<GodMode>(e)) reg.remove<GodMode>(e);
+            if (reg.all_of<NoClip>(e)) reg.remove<NoClip>(e);
         }
 
         // Convert NPC/mob entity to a persistent fallen Corpse on the floor
@@ -694,7 +698,8 @@ std::uint32_t mob_attack_step(Registry& reg, const MacroGrid& grid,
         std::uint16_t projSpeedMmps;
         std::uint8_t proj;   // ProjType, copied off the row so the launch can read it
     };
-    std::vector<Swing> queued;
+    static thread_local std::vector<Swing> queued;
+    queued.clear();
     static thread_local CellBins preyBins8m;
     bool preyBinsBuilt = false;
 

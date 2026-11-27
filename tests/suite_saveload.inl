@@ -171,9 +171,9 @@ SaveState busy_run() {
     // числа (правило этого файла): поле, оставленное в нуле, своего кодека не
     // доказывает. Левая рука перезаряжается, правая только что выстрелила,
     // тело в замахе с уже упавшим контактным кадром.
-    st.acting.slot[0] = ActWindowSnap{57u, 23u, 0u, kActReload, 0u};
-    st.acting.slot[1] = ActWindowSnap{9u, 4u, 0u, kActShoot, 0u};
-    st.acting.slot[2] = ActWindowSnap{43u, 11u, 7u, kActSwing, 1u};
+    st.acting.slot[0] = ActWindowSnap{57u, 23u, 0u, kActReload, 0u, 11u};
+    st.acting.slot[1] = ActWindowSnap{9u, 4u, 0u, kActShoot, 0u, 22u};
+    st.acting.slot[2] = ActWindowSnap{43u, 11u, 7u, kActSwing, 1u, 33u};
     st.ranged.shots = 42u;
     st.ranged.hits = 11u;
     st.kills = 99u;
@@ -285,6 +285,7 @@ void same_run(const SaveState& a, const SaveState& b) {
         CHECK(a.acting.slot[i].applyTicks == b.acting.slot[i].applyTicks);
         CHECK(a.acting.slot[i].action == b.acting.slot[i].action);
         CHECK(a.acting.slot[i].applied == b.acting.slot[i].applied);
+        CHECK(a.acting.slot[i].item == b.acting.slot[i].item);
     }
     CHECK(a.ranged.shots == b.ranged.shots);
     CHECK(a.ranged.hits == b.ranged.hits);
@@ -366,26 +367,26 @@ void wire_layout() {
     static_assert(kRpgWire == 12);
     static_assert(kCraftingWire == 89);
     static_assert(kRangedWire == 16);  // v28: таймеры рук ушли в снимок окон
-    static_assert(kActingWire == 24);  // три слота по 8 Б (S22)
-    static_assert(kCombatSaveWire == 45);
+    static_assert(kActingWire == 30);  // три слота по 10 Б (S22 + item v29)
+    static_assert(kCombatSaveWire == 51);
     static_assert(kStatusWire == 42);
     static_assert(kSamosborWire == 17);
     static_assert(kFastTravelWire == 32);
     // 927 repeats v10's total by coincidence, not compatibility: v10 had nine
     // craft axes and no hpBank, v12 has eight and hpBank. See [save.cpp].
-    static_assert(kSaveFixedWire == 626);  // v28: -8 таймеры рук, +24 занятость
+    static_assert(kSaveFixedWire == 632);  // v29: +6 item u16 в ActingSnap
     static_assert(kFactionWire == 36);
     // v20: инлайновые счётчики трупов/обломков ушли в floor-файл; v25 ужал
     // леджер на 20 Б (кошелёк+глубина вместо скоровой витрины пада); v26 снял
     // три секции целиком.
-    static_assert(save_bytes_for() == 726); // v28
-    static_assert(save_bytes_for(100, 50) == 726 + 150);
+    static_assert(save_bytes_for() == 732); // v29
+    static_assert(save_bytes_for(100, 50) == 732 + 150);
     // v27: летопись — третье слагаемое. 25 Б на факт, и это НЕ sizeof(Fact)
     // (32): связь и паддинг на провод не едут, то есть ширина строки и ширина
     // записи здесь РАЗНЫЕ числа, и путать их нельзя.
     static_assert(kFactWire == 25);
     static_assert(kFactWire != sizeof(Fact));
-    static_assert(save_bytes_for(0, 0, 3) == 726 + 75);
+    static_assert(save_bytes_for(0, 0, 3) == 732 + 75);
 
     std::vector<std::uint8_t> bytes;
     SaveState empty;
@@ -400,9 +401,9 @@ void wire_layout() {
     // (+64); v16 +289 bank; v19 bank ring cut (-244) = 1148; v20 entity
     // sections left for the floor files (-8) = 1140; v26 -418 (книга, квест-лог,
     // банк) = 710; v27 +75 (три факта летописи × 25) = 785; v28 +16
-    // (занятость 24 − таймеры рук 8) = 801.
+    // (занятость 24 − таймеры рук 8) = 801; v29 +6 (item в ActWindowSnap) = 807.
     CHECK(bytes.size() == save_bytes_for(0, 0, st.facts.size()));
-    CHECK(bytes.size() == 801u);
+    CHECK(bytes.size() == 807u);
 
     // The magic is readable in a hex dump: 'G' 'H' '2' 'S'.
     CHECK(bytes[0] == 'G');

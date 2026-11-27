@@ -42,6 +42,7 @@
 #include "game/fast_travel.h" // kFastShaftR / kFastLobbyR — the shaft footprint
 #include "world/medium.h" // kGasField (fluid.h умер)
 #include "world/destruct.h" // kSubMaterialName
+#include "world/stain.h"    // kStainFieldName, StainRGB
 #include "world/lattice.h"
 #include "world/materials.h"
 #include "world/subfield.h"
@@ -681,6 +682,9 @@ void generate_blame_floor(World& world, int number, const FloorSpec& spec,
     MacroGrid& g = world.grid();
     SubField<CellType>& sm =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
+    if (SubField<StainRGB>* st =
+            world.subfields().find<StainRGB>(kStainFieldName))
+        st->clear();
 
     Plan p;
     build_plan(p, seed, number);

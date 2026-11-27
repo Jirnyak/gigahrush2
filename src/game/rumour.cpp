@@ -5,6 +5,7 @@
 
 #include "core/wrap.h"
 #include "ecs/components.h"
+#include "game/combat.h"     // Dead, Corpse — труп не шепчет и не считается живым
 #include "game/embody.h"     // NpcRef
 #include "game/faction_relations.h"
 #include "game/mob_spawn.h"  // MobRef
@@ -28,6 +29,7 @@ std::uint16_t sample_live_mob_kind(const Registry& reg, LayerId layer,
     // current pick with probability 1/k, which yields a uniform choice without
     // knowing the count up front or storing the candidates.
     for (auto e : reg.view<const MobRef, const Transform>()) {
+        if (reg.any_of<Dead, Corpse>(e)) continue;
         if (reg.get<const Transform>(e).layer != layer) continue;
         ++seen;
         if (roll % seen == 0) pick = reg.get<const MobRef>(e).kind;
@@ -75,6 +77,7 @@ NpcId nearest_speaker(const Registry& reg, LayerId layer) {
     float bestD2 = kOverhearRange * kOverhearRange;
     for (auto e : reg.view<const NpcRef, const Transform>()) {
         if (e == ear) continue;                  // you do not overhear yourself
+        if (reg.any_of<Dead, Corpse>(e)) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         // Monsters are not embodied records and carry no NpcRef, so they cannot be

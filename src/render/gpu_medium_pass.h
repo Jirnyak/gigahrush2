@@ -370,6 +370,8 @@ private:
         std::vector<std::uint64_t>(kMacroCells / 64, 0ull);
     std::vector<std::uint32_t> lazyDirty_; // материализованные новички шва
     std::vector<std::uint32_t> pageReqCells_; // канал: клетки этого кадра
+    std::vector<std::uint32_t> frontierDirty_; // scratch для open_frontier
+    std::vector<std::uint32_t> applyLiveCis_; // scratch для apply_readback
     // ХОД B (matwej.md §9.3–§9.4): держ-решётка 16³ (4096 байт) + кольцевой
     // курсор схлопывания однородных страниц по подтикам.
     std::array<std::uint8_t, kHoldGridCells> holdGrid_{};

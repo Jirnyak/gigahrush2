@@ -653,9 +653,9 @@ grep -c 'room_at\|FloorRooms\|declared\[\|supply\[' src/game/place.h   → 6
 | следствие | мера СЕГОДНЯ | статус |
 |---|---|---|
 | запрос «место, где можно Х» не задавался НИГДЕ | `place_pick@src/game/place.h`, и у него есть прод-вызывающий — `place_errand_step@src/game/place.h` | **ЗАКРЫТО** |
-| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:261 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
-| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:293 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
-| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:291 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
+| храповик радиус-отбора построен и не прочитан | `maxOffer@src/game/room.h` читается в `src/game/place.cpp:262 «    const std::int32_t top = dot_e3(demand, fr.maxOffer);»` | **ЗАКРЫТО** |
+| бины комнат заполняются впустую | `bins@src/game/room.h` обходится в `src/game/place.cpp:294 «                    for (const RoomId id : fr.bins[bi]) {»` | **ЗАКРЫТО** |
+| потолки бинов — 304 КиБ на этаж впустую | `binCeil@src/game/room.h` читается отсечкой в `src/game/place.cpp:292 «                        dot_e3(demand, &fr.binCeil[bi * kVerbCount]);»` | **ЗАКРЫТО** |
 | девять глаголов из 19 не названы в `src/` нигде | **семь**: не названы `kVerbWork`, `kVerbTrade`, `kVerbPatrol`, `kVerbNest`, `kVerbHunt`, `kVerbHaul`, `kVerbProfit`; `kVerbDrink` и `kVerbWander` назвал спрос | **ЧАСТИЧНО** (12 из 19 названы) |
 | 11 из 13 интентов дают ОДНО движение | по-прежнему так, НО движение по делам больше не зависит от интента: его определяет сумма. См. VIII.2 | **ПЕРЕФОРМУЛИРОВАНО, открыто** |
 | ось срочности S13.5 мертва | `kVerbPatienceE3@src/game/verb_table.h` — **0** читателей вне своей таблицы | **ОТКРЫТО**: решение владельца 2026-10-01 — издержка пока только путь |
@@ -738,12 +738,12 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 
 | ранг | кто заявляет | вид цели | адрес заявки |
 |---|---|---|---|
-| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:903 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
-| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1112 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
-| `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:648 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:388 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
+| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:904 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
+| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1113 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
+| `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:649 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:389 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
 | `Chase` | погоня моба за жертвой | `Dir` / `Hold` в досягаемости | `src/game/wander.cpp:419 «                                target_dir(steer_tangent(gf, tx, ty, 0.0f), sp));»` |
 | `Walk` | прогулка + заморозка взглядом | `Zone` / `Hold` | `src/game/wander.cpp:565 «                    target_zone(wt.zone, speed));»` и `src/game/wander.cpp:438 «            steer_claim(reg, e, tick, SteerRank::Walk, target_hold());»` |
-| `Feud` | вражда — ранг ОБЪЯВЛЕН и ЧИТАЕТСЯ, но заявки не подаёт: проход пишет скорость сам | — | `src/game/faction_relations.cpp:259 «        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;»` |
+| `Feud` | вражда — ранг ОБЪЯВЛЕН и ЧИТАЕТСЯ, но заявки не подаёт: проход пишет скорость сам | — | `src/game/faction_relations.cpp:260 «        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;»` |
 
 «Кто-то сильнее уже заявил» — один вопрос, `steer_claimed_by_stronger@src/game/guide.h`,
 и он стоит ДО всей работы заявителя, а не перед записью скорости: у вражды и
@@ -802,7 +802,7 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 угрозу (`IntentFlee` — единственный интент, который заявляет `Flee`).
 
 **Названное следствие:** идущее по делу тело не драчливо — вражда уступает
-рангу `Errand` (`src/game/faction_relations.cpp:259 «        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;»`),
+рангу `Errand` (`src/game/faction_relations.cpp:260 «        if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;»`),
 и теперь это свойство выражено сравнением, а не порядком вызовов.
 
 **Чего это НЕ закрыло:** интент и место решаются двумя разными функциями над
@@ -923,7 +923,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 |---|---|---|
 | дверь O(1)-запроса навигации | `zone_walk_dir@src/game/zone_nav.h` — два чтения: таблица даёт соседку, плоскость соседки даёт направление | **ПРАВДА** |
 | вызовов `zone_walk_dir` в проде | **1 с 2026-11-09**: `src/game/guide.cpp:53 «        zone_walk_dir(zones, from, target, cx, cy, cz, gf.pull ? gf.axis : -1);»` — внутри `steer_to_zone@src/game/guide.h`. ~~**3, и все три — проходы ходьбы**: дело, наряд, прогулка~~ Три ПОБАЙТОВО одинаковых копии «куда шагнуть к зоне» по 30 строк слиты в эту одну дверь (CANON S25) | — |
-| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:580 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1063 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
+| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:581 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1064 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
 | второй и третьей двери НЕТ | `route_step` снесён вместе с `CoarseGraph`/`FineNav` и ручной композицией двух ярусов в `src/game/ai.cpp`/`src/game/wander.cpp`; реализация решёточного бейка (nav-cpp в src/world) УДАЛЕНА целиком, в `src/world/nav.h` остался только словарь шести направлений `kNavDir@src/world/nav.h` | — |
 
 **ЧЕМ ЭТО КОНЧИЛОСЬ, ЧИСЛОМ.** Прежняя дверь отвечала «шаг к ближайшему ЯКОРЮ

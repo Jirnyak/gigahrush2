@@ -355,6 +355,23 @@ bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
             bytes - off < kBulkStagingBytes ? bytes - off : kBulkStagingBytes;
         std::memcpy(bulkStaging_.mapped, p + off, take);
         if (!one_shot_begin()) return false;
+        // Закрываем WAR/WAW против кадра F-1 (kMaxFramesInFlight=2): копия из
+        // Upload_* зовётся до begin_frame_cmd(), пока предыдущий кадр ещё может
+        // читать буферы зеркала в фрагментном/компьютном пассах.
+        {
+            VkMemoryBarrier preBar{};
+            preBar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            preBar.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                                   VK_ACCESS_SHADER_WRITE_BIT |
+                                   VK_ACCESS_TRANSFER_WRITE_BIT;
+            preBar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(oneShotCmd_,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1,
+                                 &preBar, 0, nullptr, 0, nullptr);
+        }
         // srcOffset 0 — буфер один и тот же; dstOff — машинный вход льёт пул
         // кусками по кадрам и продолжает с места прошлого шага.
         VkBufferCopy region{0, dstOff + off, take};
@@ -370,11 +387,13 @@ bool VoxelMirror::upload_via_staging(VulkanBuffer& dst, const void* src,
 bool VoxelMirror::upload_wholesale_(const World& world, bool darkIdx) {
     if (!ready_) return false;
 
-    // Everything becomes fresh; the queue and its dedup bits reset with it.
+    // Everything becomes fresh; the queue and its dedup/gen state reset with it.
     dirty_.clear();
     std::fill(dirtyBits_.begin(), dirtyBits_.end(), 0u);
     idxDirty_.clear();
     std::fill(idxDirtyBits_.begin(), idxDirtyBits_.end(), 0u);
+    std::fill(markGen_.begin(), markGen_.end(), 0u);
+    std::fill(uploadGen_.begin(), uploadGen_.end(), 0u);
     lastFillCells_.clear();
     lastOccPatches_.clear();
     // Чей это мир — помнит само зеркало: оптовая заливка есть единственная

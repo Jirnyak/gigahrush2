@@ -11,6 +11,7 @@
 #include "core/rng.h"         // rand01 — стаггер пере-выбора
 #include "core/wrap.h"        // wrap_delta / wrap_macro — тор по всем трём осям
 #include "ecs/components.h"   // Transform, Velocity
+#include "game/combat.h"      // Dead, Corpse — труп не занимает вместимость комнаты
 #include "game/embody.h"      // NpcRef
 #include "game/action_table.h" // kVerbAction — в сумму сумки идут глаголы деяния
 #include "game/guide.h"       // ВЕДЕНИЕ ОДНОЙ ДВЕРЬЮ: фрейм, шаг к зоне, запись, стоп
@@ -195,7 +196,7 @@ void rooms_occupants_rebuild(FloorRooms& fr, const Registry& reg,
     if (fr.list.empty()) return;
     auto view = reg.view<const NpcRef, const Transform>();
     for (auto e : view) {
-        if (reg.all_of<Dead>(e)) continue;
+        if (reg.any_of<Dead, Corpse>(e)) continue;
         const Transform& tr = view.get<const Transform>(e);
         if (tr.layer != layer) continue;
         const RoomId at = room_at(fr, cell_of_metres(tr.pos.x),

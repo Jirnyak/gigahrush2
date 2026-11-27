@@ -335,24 +335,22 @@ inline bool acting_applied(const Acting& a, ActSlot s) {
 // «тик начала» и «сколько осталось» — разные величины, и одна структура под
 // обеими читалась бы как ошибка в половине мест.
 //
-// ⚠ РАСХОЖДЕНИЕ (названо 2026-11-14): `ActWindow::item` В СНИМОК НЕ ЕДЕТ, и
-// сегодня это безвредно только потому, что приложение снимок занятости не
-// заполняет вовсе (`acting` в сейве всегда нули — окна не переживают F5/F9).
-// Подключая снимок, обязательно везти и предмет: иначе загрузка прочтёт
-// `item = 0`, то есть «ем свой хлеб» молча станет «ем из ящика комнаты».
+// v29: `ActWindow::item` (ItemId u16) теперь едет на провод в хвосте окна —
+// иначе «ем свой хлеб» после F5/F9 превращалось бы в «ем из ящика».
 struct ActWindowSnap {
     std::uint16_t durTicks = 0;
     std::uint16_t remainTicks = 0; // 0 = слот был свободен
     std::uint16_t applyTicks = 0;
     ActionId action = 0;
     std::uint8_t applied = 0;
+    std::uint16_t item = 0;
 };
 struct ActingSnap {
     ActWindowSnap slot[kActSlotCount];
 };
 
-// Проводная ширина снимка: 3 слота × (2 + 2 + 2 + 1 + 1).
-inline constexpr std::size_t kActingWire = kActSlotCount * 8;
+// Проводная ширина снимка: 3 слота × (2 + 2 + 2 + 1 + 1 + 2).
+inline constexpr std::size_t kActingWire = kActSlotCount * 10;
 
 inline ActingSnap acting_snap(const Acting& a, std::uint64_t now) {
     ActingSnap out;
@@ -366,6 +364,7 @@ inline ActingSnap acting_snap(const Acting& a, std::uint64_t now) {
         s.applyTicks = w.applyTicks;
         s.action = w.action;
         s.applied = w.applied;
+        s.item = w.item;
     }
     return out;
 }
@@ -402,6 +401,7 @@ inline Acting acting_restore(const ActingSnap& s, std::uint64_t now) {
         w.applyTicks = snap.applyTicks;
         w.action = snap.action;
         w.applied = snap.applied;
+        w.item = snap.item;
     }
     return out;
 }
@@ -443,10 +443,10 @@ GIGA_ROW_BYTES(giga::game::Acting, 48);
 // Снимки — не строки МИРА, а строки ПРОВОДА, и контур им поставлен по тому же
 // доводу, по которому прибор [tools/check_row_law.cmake] требует его у каждой
 // `^struct` файла: раскладка, которую пишут в файл байт за байтом, обязана быть
-// прибита там же, где объявлена. 8 = 2+2+2+1+1 (ровно `kFactWire`-подобная
+// прибита там же, где объявлена. 10 = 2+2+2+1+1+2 (ровно `kFactWire`-подобная
 // честность: ширина провода и sizeof здесь СОВПАДАЮТ, потому что дыр нет).
-GIGA_ROW_BYTES(giga::game::ActWindowSnap, 8);
-GIGA_ROW_BYTES(giga::game::ActingSnap, 24);
+GIGA_ROW_BYTES(giga::game::ActWindowSnap, 10);
+GIGA_ROW_BYTES(giga::game::ActingSnap, 30);
 
 // `BreakResult` — ОТВЕТ ПО ЗНАЧЕНИЮ, а не строка мира: он не умножается ни на
 // что и никуда не едет. Контур на нём стоит без пина байтов (`GIGA_ROW`, не

@@ -405,7 +405,8 @@ void attrition() {
     CHECK(rig.pool.alive(rig.id));           // finalize_deaths owns that
     CHECK(finalize_deaths(rig.reg, deathStack, rig.pool, rig.bus, 7u) == 1);
     CHECK(!rig.pool.alive(rig.id));
-    CHECK(!rig.reg.valid(rig.body));
+    CHECK(rig.reg.all_of<Corpse>(rig.body));
+    CHECK(!rig.reg.all_of<CameraTag>(rig.body));
     CHECK(rig.bus.size() == 1);
     CHECK(rig.bus.events()[0].type == EventType::NpcDied);
     CHECK(rig.bus.events()[0].a == rig.id);

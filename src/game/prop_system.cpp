@@ -485,21 +485,11 @@ Entity link_attach(Registry& reg, Entity a, Entity b, const vec3& anchorA,
     return link;
 }
 
-namespace {
-void wake_side(Registry& reg, Entity side) {
-    if (side != entt::null && reg.valid(side) && reg.all_of<RigidBody>(side)) {
-        auto& rb = reg.get<RigidBody>(side);
-        rb.asleep = false;
-        rb.sleepTicks = 0;
-    }
-}
-} // namespace
-
 void link_detach(Registry& reg, Entity link) {
     if (!reg.valid(link) || !reg.all_of<JointLink>(link)) return;
     const JointLink jl = reg.get<JointLink>(link);
-    wake_side(reg, jl.a);
-    wake_side(reg, jl.b);
+    rigid_wake_body(reg, jl.a);
+    rigid_wake_body(reg, jl.b);
     reg.destroy(link);
 }
 
@@ -652,14 +642,8 @@ std::uint32_t anchor_validate_step(Registry& reg, const World& world,
         if (anchor_alive(world, cx, cy, cz, anchor.face, uv.u, uv.v))
             continue;
         const auto& jl = linkView.get<JointLink>(le);
-        for (Entity side : {jl.a, jl.b}) {
-            if (side != entt::null && reg.valid(side) &&
-                reg.all_of<RigidBody>(side)) {
-                auto& rb = reg.get<RigidBody>(side);
-                rb.asleep = false;
-                rb.sleepTicks = 0;
-            }
-        }
+        rigid_wake_body(reg, jl.a);
+        rigid_wake_body(reg, jl.b);
         severedLinks.push_back(le);
     }
     for (Entity le : severedLinks) reg.destroy(le);

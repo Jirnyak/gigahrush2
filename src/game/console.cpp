@@ -1032,14 +1032,8 @@ bool cmd_cut_link(ConsoleContext& ctx, int argc, const char* const* argv,
     }
     // Разбудить обе стороны ДО разруба — обрубок падает, не спит в воздухе.
     const auto jl = ctx.ecs->get<JointLink>(bestLink);
-    for (Entity side : {jl.a, jl.b}) {
-        if (side != entt::null && ctx.ecs->valid(side) &&
-            ctx.ecs->all_of<RigidBody>(side)) {
-            auto& rb = ctx.ecs->get<RigidBody>(side);
-            rb.asleep = false;
-            rb.sleepTicks = 0;
-        }
-    }
+    rigid_wake_body(*ctx.ecs, jl.a);
+    rigid_wake_body(*ctx.ecs, jl.b);
     ctx.ecs->destroy(bestLink);
     if (out && cap) put(out, cap, "cut_link: severed");
     return true;

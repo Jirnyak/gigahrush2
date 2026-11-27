@@ -49,11 +49,17 @@ public:
               VkDescriptorSetLayout shadowSetLayout = VK_NULL_HANDLE);
     void destroy();
 
-    // Rebuild the instance list from every drawable entity on `layer` into this
-    // frame's buffer, then record the instanced draw. Entities holding a
-    // CameraTag (the viewer's own body) are skipped so first-person stays clear;
-    // StaticPropTag entities are PropPass-only (skipped here); bodies whose
-    // centre is past the fog radius (push.fog.y) are culled.
+    // Загрузить инстансы кадра один раз (перед стерео-циклом, чтобы два глаза не
+    // перетирали `instances_[frameIndex]` и не сканировали ECS дважды) и
+    // нарисовать батч под пушем каждого глаза. `record` остаётся шорткатом
+    // для одиночного глаза.
+    void upload(std::uint32_t frameIndex, const Registry& reg, LayerId layer,
+                const vec3& camPos, float fogEnd);
+    void draw(VkCommandBuffer cmd, std::uint32_t frameIndex,
+              const CubePush& push,
+              VkDescriptorSet lightGridSet = VK_NULL_HANDLE,
+              VkDescriptorSet shadowSet = VK_NULL_HANDLE) const;
+
     void record(VkCommandBuffer cmd, std::uint32_t frameIndex,
                 const Registry& reg, LayerId layer, const CubePush& push,
                 VkDescriptorSet lightGridSet = VK_NULL_HANDLE,
@@ -79,6 +85,8 @@ private:
     VulkanBuffer instances_[kMaxFramesInFlight]; // host-visible, per-frame
     std::uint32_t instanceCapacity_ = 0;
     std::uint32_t lastInstanceCount_ = 0;
+    std::uint32_t lastCubeCount_ = 0;
+    std::uint32_t lastSphereCount_ = 0;
 
     bool create_pipeline(VkRenderPass renderPass, const char* shaderDir);
     bool create_cube_mesh();

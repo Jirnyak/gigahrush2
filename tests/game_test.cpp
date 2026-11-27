@@ -58,6 +58,11 @@
 #include "game/rpg.h"
 #include "world/destruct.h"  // carve_sphere — the blast's hole, drained for real
 #include "world/los.h"     // los_clear — a wall stops a fragment
+#include "world/stain.h"   // StainRGB, stain_paint
+#include "game/witness.h"  // deed_publish, witness_step
+#include "game/rumour.h"   // nearest_speaker
+#include "game/door.h"     // door_crowd_step
+#include "game/place.h"    // rooms_occupants_rebuild
 
 #include "sim/drag.h"    // drag_q — предсказание замкнутой формы в тесте трения
 #include "sim/physics.h"
@@ -5306,6 +5311,262 @@ static void repro_grate_hang() {
                 tried, converted, hung, supported);
 }
 
+static void test_wave3a_regressions() {
+    // 1. Stain SubField clears on recycled World regeneration across modules.
+    {
+        World w;
+        floor_declare_rules(w, 6, floor_spec(FloorKind::Khrushi), 1337u);
+        generate_floor(w, 6, floor_spec(FloorKind::Khrushi), 1337u);
+        w.grid().fill_cell(1, 1, 1, kMatConcrete);
+        const std::uint32_t painted =
+            stain_paint(w, kSubDim, kSubDim, kSubDim, kStainBlood);
+        CHECK(painted != UINT32_MAX);
+        const SubField<StainRGB>* stBefore =
+            w.subfields().find<StainRGB>(kStainFieldName);
+        CHECK(stBefore != nullptr && stBefore->page_count() > 0);
+        // Regenerate into the same recycled World object (keepRadius=0 simulation).
+        floor_declare_rules(w, 0, floor_spec(FloorKind::Residential), 1337u);
+        generate_floor(w, 0, floor_spec(FloorKind::Residential), 1337u);
+        const SubField<StainRGB>* stAfter =
+            w.subfields().find<StainRGB>(kStainFieldName);
+        CHECK(stAfter == nullptr || stAfter->page_count() == 0);
+    }
+
+    // 2. FloorStreamer::restore_ skips re-pouring padic water rules on restored floor.
+    {
+        LevelStack st;
+        FloorRegistry regFloors;
+        FloorStreamer streamer;
+        streamer.init(st, 0);
+        streamer.add_module(regFloors, 0, FloorKind::Padic, 1337u);
+        NpcPool pool;
+        pool.init();
+        Registry ecs;
+        streamer.seed_all_modules(pool);
+        // Pick a padic lattice sump cell (x=48, y=16, z=1) — not a 2x2 lift hub.
+        const std::size_t sumpCi = macro_index(48, 16, 1);
+        streamer.set_floor_restore([sumpCi](World& w, int /*num*/) {
+            // Leave the world dry, representing a restored floor whose sumps were drained.
+            for (std::size_t ci = 0; ci < kMacroCells; ++ci)
+                w.grid().clear_cell(static_cast<int>(ci % kMacroDim),
+                                    static_cast<int>((ci / kMacroDim) % kMacroDim),
+                                    static_cast<int>(ci / (kMacroDim * kMacroDim)));
+            if (auto* sm = w.subfields().find<CellType>(kSubMaterialName))
+                sm->clear();
+            (void)sumpCi;
+            return true;
+        });
+        NpcId pid = kInvalidNpc;
+        const LoadResult lr = streamer.ensure_loaded(st, regFloors, ecs, pool, 0, pid);
+        const World& restoredWorld = st.layer(lr.layer);
+        const SubField<CellType>* rsm =
+            restoredWorld.subfields().find<CellType>(kSubMaterialName);
+        const CellType* pg = rsm ? rsm->page(sumpCi) : nullptr;
+        CHECK(pg == nullptr || pg[0] == kCellAir);
+    }
+
+    // 3. Dead/Corpse exclusion & negative-coord floor() wrap in witness/place/door/rumour + dangling foe in ai_step.
+    {
+        World w;
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        const NpcId actorId = pool.spawn();
+        const NpcId corpseId = pool.spawn();
+        const NpcId victimId = pool.spawn();
+        CHECK(actorId != kInvalidNpc && corpseId != kInvalidNpc &&
+              victimId != kInvalidNpc);
+        for (NpcId id : {actorId, corpseId, victimId}) {
+            pool.set_floor(id, 0);
+            pool.hp(id) = 40;
+            pool.max_hp(id) = 40;
+        }
+        pool.faction(actorId) = static_cast<std::uint16_t>(Faction::Citizens);
+        pool.faction(corpseId) = static_cast<std::uint16_t>(Faction::Liquidators);
+        pool.faction(victimId) = static_cast<std::uint16_t>(Faction::Citizens);
+        const Entity actor = embody(reg, pool, actorId, 0);
+        const Entity deadWatch = embody(reg, pool, corpseId, 0);
+        reg.get<Transform>(actor).pos = vec3{-1.0f, -1.0f, 7.0f};
+        reg.get<Transform>(deadWatch).pos = vec3{-0.5f, -0.5f, 7.0f};
+        reg.emplace<Dead>(deadWatch);
+        reg.emplace<Corpse>(deadWatch);
+        pool.kill(corpseId);
+
+        FloorRooms rooms;
+        rooms_reset(rooms);
+        const RoomBox rbox{127, 127, 3, 1, 1, 1};
+        const RoomId rid = room_declare(rooms, &rbox, 1, 0, 0, nullptr);
+        CHECK(rid == 1u);
+
+        rooms_occupants_rebuild(rooms, reg, 0);
+        // Alive actor counts (1); Corpse entity must not occupy room capacity.
+        CHECK(room_occupants(rooms, rid) == 1u);
+
+        // Negative coordinate (-1.0 -> cell 127 after std::floor + wrap) + Corpse must NOT witness.
+        EventBus bus;
+        FactionRelations rel = kBaseFactionMatrix;
+        const int beforeRel =
+            rel.at(rel_row(pool, actorId), rel_row(pool, corpseId));
+        Chronicle chron;
+        chron.init();
+        deed_publish(bus, kVerbKill, actor, victimId, vec3{-1.0f, -1.0f, 7.0f}, 10u);
+        const WitnessTick wt =
+            witness_step(reg, pool, rel, bus, rooms, chron, w, 0, 0, 10u);
+        CHECK(wt.witnessed == 0u);
+        CHECK(rel.at(rel_row(pool, actorId), rel_row(pool, corpseId)) == beforeRel);
+
+        // nearest_speaker ignores Corpse.
+        {
+            const Entity cam = reg.create();
+            reg.emplace<Transform>(cam, Transform{vec3{-0.5f, -0.5f, 7.0f}, 0});
+            reg.emplace<CameraTag>(cam);
+            reg.get<Transform>(actor).pos = vec3{128.0f, 128.0f, 7.0f};
+            CHECK(nearest_speaker(reg, 0) == kInvalidNpc);
+            reg.destroy(cam);
+        }
+
+        // door_crowd_step ignores Corpse across all stagger ticks.
+        w.grid().set_cell(127, 127, 3, kMatDoorSteel);
+        Doors fd;
+        MaskGroup dg{};
+        dg.props = kMaskDoor;
+        dg.mat = kMatDoorSteel;
+        dg.centre = vec3{255.0f, 255.0f, 7.0f};
+        SubMask dm{};
+        for (int z = 0; z < kSubDim; ++z) dm.words[z] = ~std::uint64_t{0};
+        dg.cells.push_back(
+            MaskCell{static_cast<std::uint32_t>(macro_index(127, 127, 3)), dm});
+        fd.list.push_back(dg);
+        reg.get<Transform>(deadWatch).pos = vec3{255.0f, 255.0f, 7.0f};
+        reg.get<Transform>(actor).pos = vec3{128.0f, 128.0f, 7.0f};
+        std::vector<std::uint32_t> dDirty;
+        for (std::uint64_t t = 0; t < 16u; ++t) {
+            CHECK(door_crowd_step(w, fd, reg, 0, t, dDirty) == 0u);
+        }
+
+        // ai_step tolerates destroyed Senses::foe entity safely.
+        const Entity mobFoe = reg.create();
+        reg.emplace<MobRef>(mobFoe);
+        Senses sen{};
+        sen.foe = mobFoe;
+        sen.foeDist = 2.0f;
+        reg.emplace<Senses>(actor, sen);
+        reg.destroy(mobFoe);
+        reg.emplace<AiBrain>(actor);
+        const AiEnv env{};
+        const Field<float>* noDanger = nullptr;
+        for (std::uint64_t t = 0; t < 512; ++t)
+            (void)ai_step(reg, pool, noDanger, w.grid(), 0, 0.0, 0.0f, AiConfig{},
+                          nullptr, nullptr, &w, &bus, t, env, &rel);
+        CHECK(reg.valid(actor));
+    }
+
+    // 4. rigid_wake_body via link_detach clears F2 suspended flag + quietTicks.
+    {
+        Registry reg;
+        Entity a = reg.create();
+        Entity b = reg.create();
+        reg.emplace<Transform>(a, Transform{vec3{10.0f, 10.0f, 10.0f}, 0});
+        reg.emplace<Transform>(b, Transform{vec3{11.0f, 10.0f, 10.0f}, 0});
+        rigid_attach_sphere(reg, a, 0.3f, 5.0f, 0.2f, 0.5f);
+        rigid_attach_sphere(reg, b, 0.3f, 5.0f, 0.2f, 0.5f);
+        reg.get<RigidBody>(a).suspended = true;
+        reg.get<RigidBody>(a).asleep = true;
+        reg.get<RigidBody>(a).quietTicks = 40;
+        reg.get<RigidBody>(b).suspended = true;
+        reg.get<RigidBody>(b).asleep = true;
+        reg.get<RigidBody>(b).quietTicks = 40;
+        const Entity link = link_attach(reg, a, b, vec3{0, 0, 0}, vec3{0, 0, 0}, 1.0f, true);
+        link_detach(reg, link);
+        CHECK(!reg.get<RigidBody>(a).suspended && !reg.get<RigidBody>(a).asleep &&
+              reg.get<RigidBody>(a).quietTicks == 0);
+        CHECK(!reg.get<RigidBody>(b).suspended && !reg.get<RigidBody>(b).asleep &&
+              reg.get<RigidBody>(b).quietTicks == 0);
+    }
+
+    // 5. Dying CameraTag player strips camera/controller and becomes lootable Corpse.
+    {
+        LevelStack st;
+        (void)st.push_layer();
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        const NpcId pid = pool.spawn();
+        CHECK(pid != kInvalidNpc);
+        pool.set_floor(pid, 0);
+        pool.hp(pid) = 40;
+        pool.max_hp(pid) = 40;
+        const Entity pEnt = embody_as_player(ecs, pool, pid, 0);
+        CHECK(ecs.all_of<CameraTag>(pEnt));
+        CHECK(inventory_give(pool.inventory(pid), 1, 2) == 0);
+        EventBus bus;
+        apply_damage(ecs, pool, pEnt, 10000, DamageChannel::Kinetic, entt::null);
+        CHECK(ecs.all_of<Dead>(pEnt));
+        CHECK(finalize_deaths(ecs, st, pool, bus, 20u) == 1u);
+        CHECK(ecs.valid(pEnt));
+        CHECK(!ecs.all_of<CameraTag>(pEnt));
+        CHECK(ecs.all_of<Corpse>(pEnt));
+        CHECK(ecs.all_of<Container>(pEnt));
+        int totalItem1 = 0;
+        for (const ItemSlot& sl : ecs.get<Container>(pEnt).inv.slots)
+            if (sl.item == 1) totalItem1 += sl.count;
+        CHECK(totalItem1 == 2);
+    }
+
+    // 6. Opened Container Renderable::color persists across floor_file round-trip.
+    {
+        World w;
+        w.grid().set_cell(4, 4, 4, kMatConcrete);
+        Registry srcReg;
+        PropId boxId = static_cast<PropId>(0);
+        for (std::uint16_t i = 0; i < kPropCount; ++i) {
+            if (kPropTable[i].interactKind ==
+                static_cast<std::uint8_t>(InteractKind::Crate)) {
+                boxId = static_cast<PropId>(i);
+                break;
+            }
+        }
+        SubVoxelAnchor anc{};
+        anc.cx = 4; anc.cy = 4; anc.cz = 4; anc.face = 1;
+        Entity boxEnt = spawn_prop_from_id(srcReg, w, vec3{9.0f, 9.0f, 9.0f}, anc,
+                                           boxId, 0, 0.0f, 0, 0, false);
+        CHECK(boxEnt != entt::null);
+        const vec3 unopenedCol = srcReg.get<Renderable>(boxEnt).color;
+        Container& box = srcReg.emplace_or_replace<Container>(boxEnt);
+        CHECK(container_mark_opened(srcReg, boxEnt, box));
+        const vec3 openedCol = srcReg.get<Renderable>(boxEnt).color;
+        CHECK(openedCol.x != unopenedCol.x || openedCol.y != unopenedCol.y ||
+              openedCol.z != unopenedCol.z);
+
+        FloorEntityState outEnts;
+        gather_floor_entities(srcReg, 0, 6, outEnts);
+        std::vector<std::uint8_t> bytes;
+        FloorModuleKey fk{static_cast<std::uint8_t>(FloorKind::Khrushi), 1337u,
+                          module_gen_version(FloorKind::Khrushi)};
+        floor_file_write(w, 6, bytes, &outEnts, &fk);
+
+        World dstW;
+        std::int32_t floorOut = 0;
+        FloorEntityState inEnts;
+        SaveError err = SaveError::None;
+        CHECK(floor_file_read(bytes.data(), bytes.size(), dstW, &floorOut, &err,
+                              &fk, &inEnts));
+        Registry dstReg;
+        EventBus bus;
+        CHECK(spawn_prop_records(dstReg, dstW, 0, inEnts.props.data(),
+                                 inEnts.props.size(), bus) == 1u);
+        bool colorOk = false;
+        for (auto e : dstReg.view<const Container, const Renderable>()) {
+            const Container& c = dstReg.get<const Container>(e);
+            const Renderable& r = dstReg.get<const Renderable>(e);
+            if (c.opened && r.color.x == openedCol.x &&
+                r.color.y == openedCol.y && r.color.z == openedCol.z)
+                colorOk = true;
+        }
+        CHECK(colorOk);
+    }
+}
+
 int main() {
     // СТЕНД охоты (владелец 2026-08-28, «решётки не падают»):
     // GIGA_GRATE_REPRO=1 — только стенд и выход. ЧЕСТНАЯ ОГОВОРКА: его
@@ -5460,6 +5721,7 @@ int main() {
     test_light_bake_clusters();
     test_watch_all();
     test_prof_ring_all();
+    test_wave3a_regressions();
 
     std::printf("game_test: %d checks, %d failures\n", g_checks, g_fails);
 

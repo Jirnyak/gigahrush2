@@ -258,7 +258,11 @@ inline constexpr std::uint32_t kSaveMagic = 0x53324847u;
 // же длины не бывает, но даже совпади она — байты руки читались бы как магазин
 // и ствол, то есть игрок получил бы «успешную» загрузку с чужим патроном в
 // стволе. Версия — тот единственный ответ, который не зависит от длины.
-inline constexpr std::uint32_t kSaveVersion = 28u;
+// v29: `ActWindowSnap::item` едет в секции занятости (`kActingWire` 24 -> 30,
+// `kCombatSaveWire` 45 -> 51, `kSaveFixedWire` 626 -> 632), и приложение реально
+// снимает/восстанавливает окна `Acting` на F5/F9. Старые v28-сейвы отвергаются
+// честным `BadVersion`.
+inline constexpr std::uint32_t kSaveVersion = 29u;
 
 // ---------------------------------------------------------------------------
 // The silent failure mode this format is built around
@@ -414,7 +418,7 @@ inline constexpr std::size_t kRangedWire =
 static_assert(kRangedWire == 16);
 inline constexpr std::size_t kCombatSaveWire =
     1 + kRangedWire + 4 + kActingWire;  // hasRanged + ranged + kills + занятость
-static_assert(kCombatSaveWire == 45);
+static_assert(kCombatSaveWire == 51);
 // Version 9 / SAVSTAT: StatusSet field-by-field (NOT sizeof — host padding).
 // 6 x u32 remainMs + 6 x u16 intensityE3 + 6 x u8 alt = 24+12+6 = 42.
 inline constexpr std::size_t kStatusWire =
@@ -451,7 +455,8 @@ inline constexpr std::size_t kSaveFixedWire =
 // быстрого хода) = 610. v26 снял 418: книга 79 + квест-лог 294 + банк 45.
 // v28 (S22): бой 29 -> 45. Минус 8 из руки (два таймера × две руки), плюс 24 —
 // снимок занятости (три окна по 8 Б). Итого 610 + 16 = 626.
-static_assert(kSaveFixedWire == 626,
+// v29 (S22): `kActingWire` 24 -> 30 (+2 B item × 3 слота), 626 -> 632.
+static_assert(kSaveFixedWire == 632,
               "kSaveFixedWire поехал — сверь слагаемые выше и бампни "
               "kSaveVersion в той же правке");
 

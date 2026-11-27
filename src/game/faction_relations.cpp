@@ -229,7 +229,8 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
     // Allocates only on the ticks something actually swings (~1 tick in 6 on a
     // Residential floor, see the budget note below); an empty std::vector does not
     // touch the heap. Same shape mob_attack_step uses.
-    std::vector<Swing> queued;
+    static thread_local std::vector<Swing> queued;
+    queued.clear();
     static thread_local CellBins foeBins8m;
     bool foeBinsBuilt = false;
 

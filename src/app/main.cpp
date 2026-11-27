@@ -1762,6 +1762,9 @@ void write_floor_file_async(World& w, int floor,
     std::shared_ptr<SubField<CellType>> mats;
     if (SubField<CellType>* f = w.subfields().find<CellType>(kSubMaterialName))
         mats = std::make_shared<SubField<CellType>>(std::move(*f));
+    std::shared_ptr<SubField<StainRGB>> stains;
+    if (SubField<StainRGB>* sf = w.subfields().find<StainRGB>(kStainFieldName))
+        stains = std::make_shared<SubField<StainRGB>>(std::move(*sf));
     auto ep = std::make_shared<game::FloorEntityState>(std::move(ents));
     char path[1024];
     floor_save_path(floor, path, sizeof path);
@@ -1772,13 +1775,17 @@ void write_floor_file_async(World& w, int floor,
                      std::chrono::steady_clock::now() - t0)
                      .count());
     g_floorWritePending =
-        std::async(std::launch::async, [types, masks, mats, ep, key, floor, p]() {
+        std::async(std::launch::async,
+                   [types, masks, mats, stains, ep, key, floor, p]() {
             World tmp;
             tmp.grid().types_mut() = std::move(*types);
             tmp.grid().masks_mut() = std::move(*masks);
             if (mats)
                 tmp.subfields().get_or_create<CellType>(kSubMaterialName) =
                     std::move(*mats);
+            if (stains)
+                tmp.subfields().get_or_create<StainRGB>(kStainFieldName) =
+                    std::move(*stains);
             // Схлопнуть раскрытое-без-записи ПЕРЕД кодеком (течь §76.5,
             // [world/floor_awaken.h] settle_uniform_pages): tmp принадлежит
             // этой нити целиком, живого мира и зеркала здесь нет. Файл и
@@ -2445,6 +2452,11 @@ void clear_inherited_mind(Registry& reg, Entity body) {
     if (game::AiBrain* brain = reg.try_get<game::AiBrain>(body))
         brain->currentIntent = game::kIntentNone;
     reg.remove<game::PatrolPlan>(body); // маршрут прежнего владельца записи
+    reg.remove<game::WanderTarget>(body);
+    reg.remove<game::ErrandPlan>(body);
+    reg.remove<game::Acting>(body);
+    if (reg.all_of<game::GodMode>(body)) reg.remove<game::GodMode>(body);
+    if (reg.all_of<NoClip>(body)) reg.remove<NoClip>(body);
     // ЗАЯВКА ВЕДЕНИЯ СНИМАЕТСЯ ТУТ ЖЕ, и это не перестраховка: вселение
     // случается ПОСЕРЕДИНЕ кадра, а заявка, поданная до него, иначе
     // исполнилась бы на теле человека и перетёрла ввод (дефект Б6.2, которым
@@ -2545,6 +2557,8 @@ Entity possess_nearest_survivor(Registry& reg, game::NpcPool& pool, LayerId laye
         oldPlayer = e;
         reg.remove<CameraTag>(e);
         reg.remove<Controller>(e);
+        if (reg.all_of<game::GodMode>(e)) reg.remove<game::GodMode>(e);
+        if (reg.all_of<NoClip>(e)) reg.remove<NoClip>(e);
         pool.set_player(oldId, false);
         break;
     }
@@ -3665,12 +3679,15 @@ int main(int argc, char** argv) {
         input.set_mouselook(false);
         SDL_SetWindowRelativeMouseMode(window, false);
     }
+    auto sync_mouse_capture = [&](bool on) {
+        input.set_mouselook(on);
+        SDL_SetWindowRelativeMouseMode(window, on);
+    };
     auto menu_start_playing = [&]() {
         shell.screen = AppScreen::Playing;
         shell.menuPage = 0;
         shell.settingsTab = nullptr;
-        input.set_mouselook(true);
-        SDL_SetWindowRelativeMouseMode(window, true);
+        sync_mouse_capture(true);
         giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
                                          "playing");
     };
@@ -4107,6 +4124,10 @@ int main(int argc, char** argv) {
             runState.ranged = game::PlayerRanged{};
         }
         runState.kills = kills;
+        if (const auto* act = reg.try_get<game::Acting>(player))
+            runState.acting = game::acting_snap(*act, simTick);
+        else
+            runState.acting = game::ActingSnap{};
         // Version 9 / SAVSTAT: live status effects. Local person-state — not an
         // ECS component — so capture is a direct assignment. F5 mid-haze must
         // not wipe timers on F9. [status.h]
@@ -4661,11 +4682,216 @@ int main(int argc, char** argv) {
             shell.screen = AppScreen::Menu;
             shell.menuPage = 0;
             shell.settingsTab = nullptr;
-            input.set_mouselook(false);
-            SDL_SetWindowRelativeMouseMode(window, false);
+            sync_mouse_capture(false);
             giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
                                              "menu");
         }
+    };
+
+    // Единая точка загрузки рана (Menu, Pause, RunOver и F9 в бою): отказ
+    // чтения файла не срывает текущий экран, а успех чистит транзиентное
+    // состояние UI/мира и восстанавливает занятость окон (Acting v29).
+    auto perform_load_run = [&]() {
+        nav.cancel();
+        if (liftRide != LiftRide::Idle) {
+            while (nav.baking()) {
+                nav.step(simTick);
+                SDL_Delay(2);
+            }
+            (void)nav.take_prebuilt();
+            streamer.prebuild_cancel();
+            liftRide = LiftRide::Idle;
+            liftSwapLayer = kInvalidLayer;
+            std::lock_guard<std::mutex> lk(g_restoreMx);
+            g_pendingRestore.clear();
+        }
+        flush_floor_write();
+        loadWanted = false;
+
+        char runPath[1024];
+        run_save_path(runPath, sizeof runPath);
+        game::SaveState in;
+        game::SaveError err = game::SaveError::None;
+        if (!read_run(in, runPath, err)) {
+            if (err == game::SaveError::None)
+                std::snprintf(saveLine, sizeof(saveLine), "no save file (%s)",
+                              runPath);
+            else
+                std::snprintf(saveLine, sizeof(saveLine), "load refused: %s",
+                              game::save_error_text(err));
+            saveLineAt = simTick;
+            std::fprintf(stderr, "[load] %s\n", saveLine);
+            return;
+        }
+        if (!spec_for_floor(in.player.floorNumber)) {
+            std::snprintf(saveLine, sizeof(saveLine),
+                          "load refused: floor %d is not registered",
+                          in.player.floorNumber);
+            saveLineAt = simTick;
+            std::fprintf(stderr, "[load] %s\n", saveLine);
+            return;
+        }
+
+        // Чистка транзиентного UI/мира — только после валидации файла.
+        shell.close_window();
+        showConsole = false;
+        bankCounterOpen = false;
+        diceGame = game::DiceGame{};
+        lootEntity = entt::null;
+        lootIsCorpse = false;
+        lootIsBarter = false;
+        convNpc = game::kInvalidNpc;
+        convEntity = entt::null;
+        barterOwnMarks = 0;
+        barterOtherMarks = 0;
+        attackHeld = false;
+        rmbHeld = false;
+        healWanted = false;
+        reliefWanted = false;
+        useItemWanted = game::kInvalidItem;
+        craftWanted = false;
+        scrapWanted = false;
+        possessWanted = false;
+        throwWanted = false;
+        saveWanted = false;
+        rideAutosaveArmed = false;
+        doorDirty.clear();
+        doorDirtyBuilt.clear();
+        doorDirtyBuiltLayer = kInvalidLayer;
+        aiMem = game::AiMemory{};
+        antourageFalling.clear();
+        dripEmitters.clear();
+        mediumLayer = kInvalidLayer;
+        if (mediumPass.ready()) mediumPass.clear_live();
+        big_judge_reset();
+        wireClockReset = true;
+        clothClockReset = true;
+
+        runState = in;
+        const int savedFloor = runState.player.floorNumber;
+        const std::uint8_t scx = runState.player.cx;
+        const std::uint8_t scy = runState.player.cy;
+        const std::uint8_t scz = runState.player.cz;
+
+        streamer.unload(stack, registry, reg, pool, currentFloor);
+        pool.init();
+        if (!runState.poolBlob.empty() &&
+            pool.load_rows(runState.poolBlob.data(), runState.poolBlob.size())) {
+            if (!runState.macroBlob.empty() &&
+                !macroSim.load_state(runState.macroBlob.data(),
+                                     runState.macroBlob.size()))
+                std::fprintf(stderr,
+                             "[load] macro blob refused; clock restarts\n");
+            macroSim.set_floors_from(registry);
+            factionRel = runState.factions;
+        } else {
+            std::fprintf(stderr,
+                         "[load] pool blob refused; reseeding society\n");
+            streamer.seed_all_modules(pool);
+        }
+        game::NpcId pid = game::kInvalidNpc;
+        for (game::NpcId i = 0; i < pool.count(); ++i)
+            if (pool.is_player(i) && pool.alive(i)) {
+                pid = i;
+                break;
+            }
+        const game::LoadResult lr = streamer.ensure_loaded(
+            stack, registry, reg, pool, savedFloor, pid);
+        currentFloor = savedFloor;
+        currentSpec = spec_for_floor(currentFloor);
+        const LayerId nl = lr.layer;
+        activeLayer = nl;
+        player = pid != game::kInvalidNpc
+                     ? game::embody_as_player(reg, pool, pid, nl)
+                     : lr.player;
+        if (pid != game::kInvalidNpc) {
+            game::apply_player_snapshot(pool, pid, runState.player);
+            reg.emplace_or_replace<game::Equipped>(player, runState.player.eq);
+            game::sync_armour(reg, pool, player);
+        }
+        carriedRpg = runState.rpg;
+        if (reg.valid(player))
+            reg.emplace_or_replace<game::RpgStats>(player, runState.rpg);
+        crafting = runState.craft;
+        kills = runState.kills;
+        if (reg.valid(player)) {
+            if (runState.hasRanged)
+                reg.emplace_or_replace<game::PlayerRanged>(player,
+                                                             runState.ranged);
+            if (runState.kills != 0u)
+                reg.emplace_or_replace<game::PlayerMelee>(
+                    player, game::PlayerMelee{runState.kills});
+            const game::Acting restoredAct =
+                game::acting_restore(runState.acting, simTick);
+            if (game::acting_any(restoredAct, simTick))
+                reg.emplace_or_replace<game::Acting>(player, restoredAct);
+            else if (reg.all_of<game::Acting>(player))
+                reg.remove<game::Acting>(player);
+        }
+        playerStatus = runState.status;
+        samosbor = runState.samosbor;
+        fastTravel = runState.fastTravel;
+        if (!chron.load_facts(runState.facts.data(), runState.facts.size(),
+                              simTick)) {
+            std::fprintf(stderr,
+                         "[load] летопись отвергнута (%zu фактов, порядок seq "
+                         "не возрастает) — мир начинает помнить заново\n",
+                         runState.facts.size());
+            chron.init();
+        }
+        rumourLine[0] = 0;
+        rumourAt = 0;
+        game::noise_clear(noiseField);
+        game::rooms_declare(floorRooms, currentFloor,
+                            *spec_for_floor(currentFloor),
+                            streamer.floor_seed_of(registry, currentFloor));
+        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
+        arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
+        diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
+        game::rooms_supply_rebuild(floorRooms, reg, nl);
+        game::stamp_shield_programs(reg, &floorRooms, nl);
+        game::assign_lamp_shields(reg, nl);
+        game::door_declare(doors, floorRooms, currentFloor,
+                           *spec_for_floor(currentFloor),
+                           streamer.floor_seed_of(registry, currentFloor));
+        if (!arrivedRestored) dress_lift_portals(nl);
+        begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
+        if (propPass.ready()) {
+            merge_ecs_prop_meshes(reg, nl, propPass,
+                                  streamer.antourage_at_layer(registry, nl),
+                                  stack.layer(nl), simTick, &dripEmitters);
+            upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
+            upload_cloths(verletPass,
+                          streamer.antourage_at_layer(registry, nl));
+        }
+        voxelMirror.upload_all(stack.layer(nl));
+        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
+
+        game::PlacedCell placed{};
+        if (reg.valid(player)) {
+            placed = game::place_body_at_cell(reg, stack.layer(nl), player, scx,
+                                              scy, scz);
+            if (!placed.ok)
+                placed = game::place_body_safely(reg, stack.layer(nl), player);
+            aim_player(reg, player);
+        }
+        if (!placed.ok) {
+            std::snprintf(saveLine, sizeof(saveLine),
+                          "loaded %u rub floor %d; place refused%s",
+                          static_cast<unsigned>(ledger.banked), currentFloor,
+                          arrivedRestored ? " (floor restored)" : "");
+        } else {
+            std::snprintf(saveLine, sizeof(saveLine),
+                          "loaded: floor %d @%u,%u,%u, %u rub, %u alive",
+                          currentFloor, static_cast<unsigned>(scx),
+                          static_cast<unsigned>(scy),
+                          static_cast<unsigned>(scz),
+                          static_cast<unsigned>(ledger.banked),
+                          static_cast<unsigned>(pool.alive()));
+        }
+        saveLineAt = simTick;
+        std::fprintf(stderr, "[load] %s\n", saveLine);
+        if (shell.screen != AppScreen::Playing) menu_start_playing();
     };
 
     while (running) {
@@ -5360,6 +5586,27 @@ int main(int argc, char** argv) {
                                            static_cast<float>(rh));
             }
         }
+        const bool liftSwapping = (liftRide == LiftRide::SwapRefresh ||
+                                   liftRide == LiftRide::SwapDoorsNav ||
+                                   liftRide == LiftRide::SwapUpload);
+        if (saveWanted && !liftSwapping) {
+            saveWanted = false;
+            if (save_run_now())
+                std::snprintf(saveLine, sizeof(saveLine),
+                              "saved: floor %d, %u rub", currentFloor,
+                              static_cast<unsigned>(ledger.banked));
+            else {
+                char runPath[1024];
+                run_save_path(runPath, sizeof runPath);
+                std::snprintf(saveLine, sizeof(saveLine),
+                              "SAVE FAILED: could not write %s", runPath);
+            }
+            saveLineAt = simTick;
+            std::fprintf(stderr, "[save] %s\n", saveLine);
+        }
+        if (loadWanted) {
+            perform_load_run();
+        }
 
         // A console teleport is executed HERE, at the top of a frame, never in
         // the ImGui callback that requested it: mid-draw the frame's layer and
@@ -5454,10 +5701,16 @@ int main(int argc, char** argv) {
         // оставляет труп, но не дипломатию. [witness.h]
         {
             const auto profWitnessT0 = prof_now();
-            const game::WitnessTick wt = game::witness_step(
-                reg, pool, factionRel, bus, floorRooms, chron,
-                stack.layer(activeLayer), activeLayer,
-                static_cast<std::int16_t>(currentFloor), simTick);
+            const bool swapBusy = (liftRide == LiftRide::SwapRefresh ||
+                                   liftRide == LiftRide::SwapDoorsNav ||
+                                   liftRide == LiftRide::SwapUpload);
+            const game::WitnessTick wt =
+                swapBusy
+                    ? game::WitnessTick{}
+                    : game::witness_step(
+                          reg, pool, factionRel, bus, floorRooms, chron,
+                          stack.layer(activeLayer), activeLayer,
+                          static_cast<std::int16_t>(currentFloor), simTick);
             prof_add(kProfWitness, profWitnessT0);
             relTick = {};
             relTick.kills = wt.witnessed;  // HUD: замеченные деяния кадра
@@ -5832,14 +6085,15 @@ int main(int argc, char** argv) {
             } else if (has(ConsoleRequest::Menu) &&
                        (shell.screen == AppScreen::Playing ||
                         shell.screen == AppScreen::Pause)) {
-                // Esc: открытое окно закрывается ПЕРВЫМ, пауза — вторым; один
-                // источник истины делает порядок выразимым одной веткой.
-                // Pausing frees the cursor so the menu is clickable and the OS
-                // window can be moved / minimised; leaving re-arms mouselook.
-                if (shell.playing() && shell.window != UiWindow::None) {
+                // Esc: консоль закрывается первой, открытое UI-окно — вторым,
+                // пауза — третьей; мышь возвращается только когда поверх игры
+                // ничего не осталось.
+                if (shell.playing() && showConsole) {
+                    showConsole = false;
+                    sync_mouse_capture(shell.window == UiWindow::None);
+                } else if (shell.playing() && shell.window != UiWindow::None) {
                     shell.close_window();
-                    input.set_mouselook(true);
-                    SDL_SetWindowRelativeMouseMode(window, true);
+                    sync_mouse_capture(!showConsole);
                 } else {
                     shell.screen = shell.screen == AppScreen::Pause
                                        ? AppScreen::Playing
@@ -5847,8 +6101,9 @@ int main(int argc, char** argv) {
                     shell.menuPage = 0;
                     shell.settingsTab = nullptr;
                     if (shell.playing()) rebindCapture = -1;
-                    input.set_mouselook(shell.playing());
-                    SDL_SetWindowRelativeMouseMode(window, shell.playing());
+                    sync_mouse_capture(shell.playing() &&
+                                       shell.window == UiWindow::None &&
+                                       !showConsole);
                 }
             }
             if (has(ConsoleRequest::Hud)) showHud = !showHud;
@@ -5859,23 +6114,22 @@ int main(int argc, char** argv) {
                 showConsole = !showConsole;
                 consoleFocus = showConsole;
                 if (showConsole) {
-                    input.set_mouselook(false);
-                    SDL_SetWindowRelativeMouseMode(window, false);
+                    sync_mouse_capture(false);
+                } else if (shell.playing() && shell.window == UiWindow::None) {
+                    sync_mouse_capture(true);
                 }
             }
             if (has(ConsoleRequest::Mouselook) && shell.playing()) {
-                const bool on = !input.mouselook();
-                input.set_mouselook(on);
-                SDL_SetWindowRelativeMouseMode(window, on);
+                sync_mouse_capture(!input.mouselook());
             }
             if (has(ConsoleRequest::Inventory)) {
                 // Открытие освобождает курсор для клеток; закрытие возвращает
                 // mouselook — сетка, в отличие от консоли, открывается по сто
                 // раз за ран, и «верни взгляд руками» стало бы налогом.
                 shell.toggle(UiWindow::Inventory);
-                const bool giveMouse = shell.window == UiWindow::None;
-                input.set_mouselook(giveMouse);
-                SDL_SetWindowRelativeMouseMode(window, giveMouse);
+                sync_mouse_capture(shell.playing() &&
+                                   shell.window == UiWindow::None &&
+                                   !showConsole);
             }
             // 3D Side-by-Side. Тумблер консольный и в настройках — клавиши он
             // не получает: чистка 2026-08-28 сняла разовые действия с
@@ -5917,12 +6171,16 @@ int main(int argc, char** argv) {
             if (has(ConsoleRequest::Scrap)) scrapWanted = true;
             if (has(ConsoleRequest::Elevator)) {
                 shell.toggle(UiWindow::Elevator);
-                if (shell.window != UiWindow::None) input.set_mouselook(false);
+                sync_mouse_capture(shell.playing() &&
+                                   shell.window == UiWindow::None &&
+                                   !showConsole);
             }
             if (has(ConsoleRequest::Craft)) {
                 craftWanted = true;
                 shell.toggle(UiWindow::Craft);
-                if (shell.window != UiWindow::None) input.set_mouselook(false);
+                sync_mouse_capture(shell.playing() &&
+                                   shell.window == UiWindow::None &&
+                                   !showConsole);
             }
             // ATTR1: spend one unspent point. HP ptrs from the pool row so
             // STR immediately credits max-HP the same way award_xp does.
@@ -6078,8 +6336,11 @@ int main(int argc, char** argv) {
             static std::vector<std::uint32_t> mediumMaskChanged;
             mediumMaskChanged.clear();
             const auto ctMedA = std::chrono::steady_clock::now();
-            mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
-                                      &mediumMaskChanged);
+            if (voxelMirror.holds(stack.layer(activeLayer)) &&
+                !voxelMirror.entry_upload_pending()) {
+                mediumPass.apply_readback(stack.layer(activeLayer), voxelMirror,
+                                          &mediumMaskChanged);
+            }
             if (g_regrowWatch >= 2 && activeLayer != kInvalidLayer)
                 regrow_check(stack.layer(activeLayer), voxelMirror, "шов",
                              simTick);
@@ -6142,7 +6403,10 @@ int main(int argc, char** argv) {
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
         // does not fast-forward the missed interval.
-        if (shell.sim_frozen()) {
+        if (shell.sim_frozen() ||
+            liftRide == LiftRide::SwapRefresh ||
+            liftRide == LiftRide::SwapDoorsNav ||
+            liftRide == LiftRide::SwapUpload) {
             simAccum = 0.0f;
         } else {
             simAccum += frameDt;
@@ -8901,16 +9165,16 @@ int main(int argc, char** argv) {
                                 game::prop_craft_station(po->id) !=
                                     game::CraftStation::Count) {
                                 shell.window = UiWindow::Craft;
-                                input.set_mouselook(false);
-                                SDL_SetWindowRelativeMouseMode(window, false);
+                                sync_mouse_capture(false);
                                 handled = true;
                             }
                         }
                         if (!handled && aimedEnt &&
                             g_focus.kind == game::InteractKind::LiftPanel) {
                             shell.toggle(UiWindow::Elevator);
-                            if (shell.window != UiWindow::None)
-                                input.set_mouselook(false);
+                            sync_mouse_capture(shell.playing() &&
+                                               shell.window == UiWindow::None &&
+                                               !showConsole);
                             handled = true;
                         }
                         // ЛУТ — НАВЕС «ДАТЬ ПРЕДМЕТ» (владелец 2026-11-07):
@@ -9522,288 +9786,8 @@ int main(int argc, char** argv) {
                 // был последним авто-действием близости в тике. Рубли в
                 // `ledger.banked` теперь двигают только явные глаголы: теллер
                 // банка, квесты, контракты.
-                // Save and load. Both are world mutations, so they sit on the sim's
-                // clock beside the other intent flags rather than in the event loop.
-                if (saveWanted) {
-                    saveWanted = false;
-                    // The same one-law save the transition autosave uses:
-                    // run.sav + the resident floor's own file. [save.h]
-                    if (save_run_now())
-                        std::snprintf(saveLine, sizeof(saveLine),
-                                      "saved: floor %d, %u rub",
-                                      currentFloor,
-                                      static_cast<unsigned>(ledger.banked));
-                    else {
-                        char runPath[1024];
-                        run_save_path(runPath, sizeof runPath);
-                        std::snprintf(saveLine, sizeof(saveLine),
-                                      "SAVE FAILED: could not write %s", runPath);
-                    }
-                    saveLineAt = simTick;
-                    // Headless --shot proof: HUD is invisible in captures
-                    // without a human; stderr is the audit trail. [save.h]
-                    std::fprintf(stderr, "[save] %s\n", saveLine);
-                }
-                // F9 full load: run + floor + cell + armour. APIs live in save.h;
-                // this was the only call site that still did a partial field copy and
-                // admitted it would not restore position. [save.h]
-                if (loadWanted) {
-                    // Загрузка = «по сути новая игра» (решение владельца): бейк
-                    // в полёте ОТМЕНЯЕТСЯ (узловая гранулярность, join внутри
-                    // begin_floor_nav мгновенный) — воркер владеет только
-                    // снапшотом битсетов, миру он не опасен. [game/rebake.h]
-                    nav.cancel();
-                    // Лифтовая поездка в полёте — особый случай: Prebuild-
-                    // задание неделимо (restore-чтение файла не опрашивает
-                    // отмену), а его слот нужен самой загрузке (keepRadius=0
-                    // => физических слоёв ровно два). Дождаться выхода
-                    // воркера и вернуть слот; худший случай — секунды
-                    // restore-чтения. «F9 во время бейка = отменить и
-                    // грузить» — решение владельца (async-rebake.md §9).
-                    if (liftRide != LiftRide::Idle) {
-                        while (nav.baking()) {
-                            nav.step(simTick);
-                            SDL_Delay(2);
-                        }
-                        (void)nav.take_prebuilt(); // мусор по контракту
-                        streamer.prebuild_cancel();
-                        liftRide = LiftRide::Idle;
-                        // Запись воркера для отменённого этажа — сирота
-                        // (~6 МБ на 15k пропов): прибытия не будет, а
-                        // корректность держит erase-first в apply_floor_file
-                        // (аудит F, жук №3). Чистим гигиены ради.
-                        std::lock_guard<std::mutex> lk(g_restoreMx);
-                        g_pendingRestore.clear();
-                    }
-                    // Загрузка читает floor-файлы — фоновый хвост обязан
-                    // долететь до диска (5a).
-                    flush_floor_write();
-                    {
-                        loadWanted = false;
-                        char runPath[1024];
-                        run_save_path(runPath, sizeof runPath);
-                        game::SaveState in;
-                        game::SaveError err = game::SaveError::None;
-                        if (!read_run(in, runPath, err)) {
-                            // No file and a refused file need different words: one is a
-                            // first run, the other is a save the build can no longer read.
-                            if (err == game::SaveError::None)
-                                std::snprintf(saveLine, sizeof(saveLine),
-                                              "no save file (%s)", runPath);
-                            else
-                                std::snprintf(saveLine, sizeof(saveLine),
-                                              "load refused: %s",
-                                              game::save_error_text(err));
-                        } else if (!spec_for_floor(in.player.floorNumber)) {
-                            std::snprintf(saveLine, sizeof(saveLine),
-                                          "load refused: floor %d is not registered",
-                                          in.player.floorNumber);
-                        } else {
-                            // `ledger` and `contracts` are references INTO runState, so
-                            // this one assignment republishes both without touching a
-                            // use site.
-                            runState = in;
-                            const int savedFloor = runState.player.floorNumber;
-                            const std::uint8_t scx = runState.player.cx;
-                            const std::uint8_t scy = runState.player.cy;
-                            const std::uint8_t scz = runState.player.cz;
-
-                            // FULL WORLD RESTORE, boot-shaped ([save.h] v6): fold
-                            // and evict the resident floor, blank the pool, load
-                            // the saved SOCIETY, then build the saved floor and
-                            // embody from the restored rows. No body survives the
-                            // transition, so no body can hold a stale id — the
-                            // same reason the main menu loads before anything is
-                            // embodied.
-                            streamer.unload(stack, registry, reg, pool,
-                                            currentFloor);
-                            pool.init();
-                            if (!runState.poolBlob.empty() &&
-                                pool.load_rows(runState.poolBlob.data(),
-                                               runState.poolBlob.size())) {
-                                // The macro clock and the society's attitudes
-                                // come with it.
-                                if (!runState.macroBlob.empty() &&
-                                    !macroSim.load_state(
-                                        runState.macroBlob.data(),
-                                        runState.macroBlob.size()))
-                                    std::fprintf(stderr,
-                                                 "[load] macro blob refused; "
-                                                 "clock restarts\n");
-                                macroSim.set_floors_from(registry);
-                                factionRel = runState.factions;
-                            } else {
-                                // A save without a society (or a refused blob):
-                                // reseed from scratch and say so — the run state
-                                // still loads.
-                                std::fprintf(stderr,
-                                             "[load] pool blob refused; "
-                                             "reseeding society\n");
-                                streamer.seed_all_modules(pool);
-                            }
-                            // The restored player ROW is the one that carries the
-                            // NpcPlayer bit; the snapshot then reasserts the
-                            // authoritative clock/bag/hp on top of it.
-                            game::NpcId pid = game::kInvalidNpc;
-                            for (game::NpcId i = 0; i < pool.count(); ++i)
-                                if (pool.is_player(i) && pool.alive(i)) {
-                                    pid = i;
-                                    break;
-                                }
-                            const game::LoadResult lr = streamer.ensure_loaded(
-                                stack, registry, reg, pool, savedFloor, pid);
-                            currentFloor = savedFloor;
-                            currentSpec = spec_for_floor(currentFloor);
-                            const LayerId nl = lr.layer;
-                            activeLayer = nl;
-                            player = pid != game::kInvalidNpc
-                                         ? game::embody_as_player(reg, pool, pid,
-                                                                  nl)
-                                         : lr.player;
-                            if (pid != game::kInvalidNpc) {
-                                game::apply_player_snapshot(pool, pid,
-                                                            runState.player);
-                                // Decisions BEFORE the armour sync, or the sync
-                                // reads the fresh body's empty cells and strips
-                                // the vest the save says is worn. [save.h] eq
-                                reg.emplace_or_replace<game::Equipped>(
-                                    player, runState.player.eq);
-                                game::sync_armour(reg, pool, player);
-                            }
-                            // Version 7: stamp the sheet onto the body and the
-                            // death-surviving carried snapshot, then restore the
-                            // crafting bank. embody_as_player may have rolled a
-                            // fresh sheet from the record — overwrite it. [save.h]
-                            carriedRpg = runState.rpg;
-                            if (reg.valid(player))
-                                reg.emplace_or_replace<game::RpgStats>(
-                                    player, runState.rpg);
-                            crafting = runState.craft;
-                            // Version 8 / SAVMAG: restore chambered mag (lazy)
-                            // and the cumulative kill tally so F9 does not free
-                            // the ammo already debited into the magazine, and
-                            // does not zero the HUD kills line. [combat.h]
-                            kills = runState.kills;
-                            if (reg.valid(player)) {
-                                if (runState.hasRanged)
-                                    reg.emplace_or_replace<game::PlayerRanged>(
-                                        player, runState.ranged);
-                                if (runState.kills != 0u)
-                                    reg.emplace_or_replace<game::PlayerMelee>(
-                                        player, game::PlayerMelee{runState.kills});
-                            }
-                            // Version 9 / SAVSTAT: restore live status effects so
-                            // F9 mid-haze keeps the same move/aim/melee mults.
-                            // Local person-state — direct assignment. [status.h]
-                            playerStatus = runState.status;
-                            // Version 10 / SAVCLOCK: the samosbor clock is RESTORED,
-                            // not re-armed. This line used to read
-                            // `samosbor = samosbor_new_game(sbRng)` under the comment
-                            // "per-floor clocks reset, same as any arrival" — but a
-                            // load is not an arrival, it is a RESUMPTION, and the two
-                            // want opposite things. Re-arming meant the standard save
-                            // button cancelled the central crisis mechanic: a player
-                            // caught mid-Active at |z| = 50 loaded into Idle with the
-                            // per-run `count` back at 0, which also reset the fog
-                            // roster `MobDef::minSamosbor` unlocks against.
-                            // The fast-travel set is restored for the same reason:
-                            // discovery is progress, not per-floor channel state.
-                            samosbor = runState.samosbor;
-                            fastTravel = runState.fastTravel;
-                            // v27: ПАМЯТЬ МИРА (S21) — по тому же доводу, по
-                            // которому восстанавливаются часы самосбора:
-                            // загрузка есть ВОЗОБНОВЛЕНИЕ, а не прибытие, и
-                            // мир, забывший все деяния на F9, был бы миром, в
-                            // котором убийство стоит одну кнопку. Цепи
-                            // ПЕРЕСОБИРАЮТСЯ здесь же (связи не ехали).
-                            if (!chron.load_facts(runState.facts.data(),
-                                                  runState.facts.size(),
-                                                  simTick)) {
-                                std::fprintf(stderr,
-                                             "[load] летопись отвергнута "
-                                             "(%zu фактов, порядок seq не "
-                                             "возрастает) — мир начинает "
-                                             "помнить заново\n",
-                                             runState.facts.size());
-                                chron.init();
-                            }
-                            // Здесь перезаводились часы процентов банка на ЖИВОЙ
-                            // тик (сохранённый тик в новой сессии — ложь). Банк
-                            // снесён 2026-11-08; правило про часы живо и ждёт
-                            // первого пер-тикового поля, которое поедет в сейв.
-                            // Per-floor channels reset, same as any arrival — these
-                            // ARE floor-scoped, unlike the two clocks above.
-                            rumourLine[0] = 0;
-                            rumourAt = 0;
-                            game::noise_clear(noiseField);
-                            // Тот же порядок прибытия, что у поездки (F9 —
-                            // третий сайт того же закона): комнаты РАНЬШЕ
-                            // сидеров (F9 объявлял их ПОСЛЕ сева ящиков —
-                            // ящики селились по комнатам покинутого этажа),
-                            // затем развилка сущностей (записи — из floor-
-                            // файла, прочитанного restore-веткой
-                            // ensure_loaded, НЕ из run.sav — v20).
-                            game::rooms_declare(
-                                floorRooms, currentFloor,
-                                *spec_for_floor(currentFloor),
-                                streamer.floor_seed_of(registry, currentFloor));
-                            refresh_floor_mobs(reg, stack.layer(nl), currentFloor,
-                                               nl, simTick);
-                            arrivedRestored =
-                                floor_entity_half(nl, currentFloor, simTick);
-                            // Диффузия: F9 — единственный сайт прибытия, не
-                            // звавший контрактную чистку ([diffusion.h]) —
-                            // опасность покинутого этажа жила в клетках слота.
-                            diffusion_driver_on_floor_built(
-                                diffusionDriver, stack.layer(nl), nl);
-                            game::rooms_supply_rebuild(floorRooms, reg, nl);
-                            game::stamp_shield_programs(reg, &floorRooms, nl);
-                            game::assign_lamp_shields(reg, nl);
-                            game::door_declare(doors, floorRooms, currentFloor,
-                           *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
-                            if (!arrivedRestored) dress_lift_portals(nl);
-                            begin_floor_nav(stack.layer(nl), currentFloor, nav, &floorRooms);
-                            if (propPass.ready()) {
-                                merge_ecs_prop_meshes(reg, nl, propPass,
-                                  streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), simTick, &dripEmitters);
-                upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
-                upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
-                            }
-                            voxelMirror.upload_all(stack.layer(nl));
-                            if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
-
-                            game::PlacedCell placed{};
-                            if (reg.valid(player)) {
-                                placed = game::place_body_at_cell(
-                                    reg, stack.layer(nl), player, scx, scy, scz);
-                                aim_player(reg, player);
-                            }
-
-                            // Honest HUD: place slip / ok, with the society size.
-                            if (!placed.ok) {
-                                std::snprintf(
-                                    saveLine, sizeof(saveLine),
-                                    "loaded %u rub floor %d; place refused%s",
-                                    static_cast<unsigned>(ledger.banked), currentFloor,
-                                    arrivedRestored ? " (floor restored)" : "");
-                            } else {
-                                std::snprintf(
-                                    saveLine, sizeof(saveLine),
-                                    "loaded: floor %d @%u,%u,%u, %u rub, %u alive",
-                                    currentFloor, static_cast<unsigned>(scx),
-                                    static_cast<unsigned>(scy),
-                                    static_cast<unsigned>(scz),
-                                    static_cast<unsigned>(ledger.banked),
-                                    static_cast<unsigned>(pool.alive()));
-                            }
-                        }
-                        saveLineAt = simTick;
-                        // Same headless proof trail as save. [save.h]
-                        std::fprintf(stderr, "[load] %s\n", saveLine);
-                    }
-                }
+                // (Сохранение и загрузка теперь дренируются вверху кадра до
+                // sim_frozen — работают из Playing, Pause, RunOver и Menu.)
                 // (The pad shop is gone — [conversation.md]: trade is a deal
                 // with a BODY, not a place. The pad keeps its one job, banking.)
                 // CRAFTING (дев-канал ConsoleRequest::Craft/Scrap). Станции —
@@ -9885,9 +9869,10 @@ int main(int argc, char** argv) {
                                                   simTick);
                     healWanted = false;
                 }
-                // The player is not exempt: if it died it no longer exists, and
-                // everything below reads through it. Take another body now.
-                if (!reg.valid(player)) {
+                // The player is not exempt: if it died it no longer exists (or
+                // converted into a Corpse without CameraTag), and everything
+                // below reads through it. Take another body now.
+                if (!reg.valid(player) || !reg.all_of<CameraTag>(player)) {
                     ++playerDeaths;
                     // Цену смерти несёт сам мир: мёртвая строка пула хранит
                     // инвентарь вечно, и ни одно живое тело до него не
@@ -10732,10 +10717,14 @@ int main(int argc, char** argv) {
         // window draws whenever open — paused or not — and a teleport request
         // is carried out at the top of the NEXT frame (see do_ride).
         if (showConsole) {
+            const bool wasOpen = showConsole;
             refresh_console_ctx();
             DrawConsoleUI(&showConsole, &consoleFocus, consoleInput,
                           sizeof consoleInput, console, consoleCtx, consoleLog,
                           consoleHistory, consoleHistPos);
+            if (wasOpen && !showConsole && shell.playing() &&
+                shell.window == UiWindow::None)
+                sync_mouse_capture(true);
         }
 
         // ── Инвентарная сетка ([inventory.md]) ─────────────────────────
@@ -11093,7 +11082,11 @@ int main(int argc, char** argv) {
                     DrawCraftingWindowUI(&craftOpen, crafting, pool.inventory(nrk->id), 
                                          bench, simTick, reg, player, pool, 
                                          crafted, scrapped, recipesLearned);
-                    if (!craftOpen) shell.close_window();
+                    if (!craftOpen) {
+                        shell.close_window();
+                        if (shell.playing() && !showConsole)
+                            sync_mouse_capture(true);
+                    }
                 }
             }
         }
@@ -11155,8 +11148,11 @@ int main(int argc, char** argv) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, -1);
                         if (cabin >= 0 && dst != currentFloor) {
-                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true))
+                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true)) {
                                 shell.close_window();
+                                if (shell.playing() && !showConsole)
+                                    sync_mouse_capture(true);
+                            }
                         } else if (cabin < 0) {
                             exec_command("ride down");
                         }
@@ -11165,8 +11161,11 @@ int main(int argc, char** argv) {
                         const int dst =
                             game::next_labelled_floor(registry, currentFloor, +1);
                         if (cabin >= 0 && dst != currentFloor) {
-                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true))
+                            if (start_lift_ride(dst, cabin, /*deferFallback=*/true)) {
                                 shell.close_window();
+                                if (shell.playing() && !showConsole)
+                                    sync_mouse_capture(true);
+                            }
                         } else if (cabin < 0) {
                             exec_command("ride up");
                         }
@@ -11196,8 +11195,11 @@ int main(int argc, char** argv) {
                                 // Посадка = открытие ЭТОГО этажа (§24) — тот
                                 // же акт, что у консольной команды.
                                 fastTravel.unlock(currentFloor);
-                                if (start_lift_ride(f, hub, /*deferFallback=*/true))
+                                if (start_lift_ride(f, hub, /*deferFallback=*/true)) {
                                     shell.close_window();
+                                    if (shell.playing() && !showConsole)
+                                        sync_mouse_capture(true);
+                                }
                             }
                         }
                         ++offered;
@@ -11207,7 +11209,11 @@ int main(int argc, char** argv) {
                 }
             }
             ImGui::End();
-            if (!elevOpen) shell.close_window();
+            if (!elevOpen) {
+                shell.close_window();
+                if (shell.playing() && !showConsole)
+                    sync_mouse_capture(true);
+            }
         }
 
         // ── Разговор с NPC ([conversation.md]) ─────────────────────────
@@ -11489,15 +11495,16 @@ int main(int argc, char** argv) {
                     char label[32];
                     std::snprintf(label, sizeof label, "Слот %d", s);
                     if (ImGui::Button(label, btn)) {
-                        // The load itself runs on the sim clock next frame —
-                        // and BEFORE the player has touched anything, which is
-                        // what makes the full v6 world restore safe.
+                        // Входим в игру только после успешного read_run внутри
+                        // perform_load_run() в начале кадра.
                         g_saveSlot = s;
                         loadWanted = true;
-                        menu_start_playing();
                     }
                 }
                 if (!any) ImGui::TextUnformatted("(сейвов пока нет)");
+                if (saveLine[0])
+                    ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "%s",
+                                       saveLine);
                 ImGui::Spacing();
                 if (ImGui::Button("Назад", btn)) shell.menuPage = 0;
             } else if (shell.menuPage == 2) {
@@ -11710,6 +11717,9 @@ int main(int argc, char** argv) {
             }
             ImGui::Separator();
             const ImVec2 btn(240.0f, 0.0f);
+            if (ImGui::Button("Загрузить слот", btn)) {
+                loadWanted = true;
+            }
             if (ImGui::Button("Новый забег", btn)) {
                 newRunWanted = true;
                 newRunWipeSlot = true;
@@ -12376,11 +12386,18 @@ int main(int argc, char** argv) {
             std::uint64_t t1 = SDL_GetPerformanceCounter();
             // Draw the embodied population on the active layer (shared depth).
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Bodies);
-            if (!skip_pass("bodies"))
+            if (!skip_pass("bodies")) {
+                bodyPass.upload(renderer.currentFrame, reg, activeLayer,
+                                vec3{eyePush[0].camPos.x, eyePush[0].camPos.y,
+                                     eyePush[0].camPos.z},
+                                eyePush[0].fog.y);
                 for (std::uint32_t e = 0; e < eyeCount; ++e) {
                     set_eye_viewport(e);
-                    bodyPass.record(cmd, renderer.currentFrame, reg, activeLayer, eyePush[e], lightGrid.descriptor_set(), voxelMirror.shadow_set());
+                    bodyPass.draw(cmd, renderer.currentFrame, eyePush[e],
+                                  lightGrid.descriptor_set(),
+                                  voxelMirror.shadow_set());
                 }
+            }
             renderer.timer.pass_end(cmd, gpu::GpuPass::Bodies);
             // Props: GPU-instanced arbitrary-mesh pass, same depth buffer.
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Props);
@@ -12433,21 +12450,41 @@ int main(int argc, char** argv) {
             renderer.timer.pass_begin(cmd, gpu::GpuPass::Hud);
             hud.render(cmd);
             renderer.timer.pass_end(cmd, gpu::GpuPass::Hud);
-            // Аудио-кадр: слушатель = тело с камерой, события — NoiseField,
-            // опасность — danger-поле слоя. [audio/audio_system.h]
-            if (reg.valid(player)) {
-                const Transform& atr = reg.get<Transform>(player);
-                const CameraTag* acam = reg.try_get<CameraTag>(player);
+            // Аудио-кадр: слушатель = тело с камерой (или последняя позиция при
+            // RunOver), события — NoiseField, опасность — danger-поле слоя.
+            // Когда мир заморожен (Menu/Pause/Intro/RunOver), сирены/Гейгер и
+            // мировые шумы заглушены, а хардварный поток продолжает кормиться.
+            {
+                static vec3 lastAudioPos{0.0f, 0.0f, 0.0f};
+                static float lastAudioYaw = 0.0f;
+                static float lastAudioPitch = 0.0f;
+                if (reg.valid(player)) {
+                    lastAudioPos = reg.get<Transform>(player).pos;
+                    if (const CameraTag* acam = reg.try_get<CameraTag>(player)) {
+                        lastAudioYaw = acam->yaw;
+                        lastAudioPitch = acam->pitch;
+                    }
+                }
+                const bool worldAudioLive =
+                    !shell.sim_frozen() && activeLayer != kInvalidLayer &&
+                    reg.valid(player);
+                static const game::SamosborState kSilentSamosbor{};
+                static const game::NoiseField kSilentNoise{};
                 const Field<float>* adanger =
-                    stack.layer(activeLayer).fields().find<float>(kDangerField);
-                // `bus` здесь больше НЕ передаётся: параметр снят из сигнатуры
-                // 2026-10-12 — аудио его принимало и глушило `(void)bus;`,
-                // ни одной строки обращения в `src/audio/` не было.
-                audioSys.update(frameDt, atr.pos, acam ? acam->yaw : 0.0f,
-                                acam ? acam->pitch : 0.0f,
-                                stack.layer(activeLayer).grid(), adanger,
-                                samosbor, noiseField, 1.0f,
-                                activeLayer);
+                    worldAudioLive
+                        ? stack.layer(activeLayer)
+                              .fields()
+                              .find<float>(kDangerField)
+                        : nullptr;
+                const MacroGrid& agrid =
+                    stack.layer(activeLayer != kInvalidLayer ? activeLayer : 0u)
+                        .grid();
+                audioSys.update(
+                    frameDt, lastAudioPos, lastAudioYaw, lastAudioPitch, agrid,
+                    adanger, worldAudioLive ? samosbor : kSilentSamosbor,
+                    worldAudioLive ? noiseField : kSilentNoise,
+                    worldAudioLive ? 1.0f : 0.0f,
+                    activeLayer != kInvalidLayer ? activeLayer : LayerId{0});
             }
             renderer.end_frame(window);
             g_frameMark.renderMs =

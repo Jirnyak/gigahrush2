@@ -986,6 +986,7 @@ void VerletPass::destroy() {
     wireDrawPipeline_ = VK_NULL_HANDLE;
     clothDrawPipeline_ = VK_NULL_HANDLE;
     particleDrawPipeline_ = VK_NULL_HANDLE;
+    shardDrawPipeline_ = VK_NULL_HANDLE;
     drawLayout_ = VK_NULL_HANDLE;
     simPipeline_ = VK_NULL_HANDLE;
     simLayout_ = VK_NULL_HANDLE;

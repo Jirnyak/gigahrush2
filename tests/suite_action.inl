@@ -284,7 +284,7 @@ static void test_action_ms_matches_the_dead_decrement() {
 // ---- 7. Снимок едет остатком ----------------------------------------------
 static void test_action_snapshot_rides_the_remainder() {
     Acting a{};
-    CHECK(acting_begin(a, ActSlot::HandL, kActReload, 100, 0, 1000u));
+    CHECK(acting_begin(a, ActSlot::HandL, kActReload, 100, 0, 1000u, /*item*/ 42u));
     CHECK(acting_begin(a, ActSlot::Body, kActShot, 40, 10, 1000u));
     CHECK(acting_take_apply(a, ActSlot::Body, 1010u));
 
@@ -293,6 +293,7 @@ static void test_action_snapshot_rides_the_remainder() {
     CHECK(s.slot[0].durTicks == 100);
     CHECK(s.slot[0].remainTicks == 70);
     CHECK(s.slot[0].action == kActReload);
+    CHECK(s.slot[0].item == 42u);
     CHECK(s.slot[1].remainTicks == 0);   // свободная рука едет нулями
     CHECK(s.slot[2].remainTicks == 10);
     CHECK(s.slot[2].applied == 1);
@@ -302,6 +303,7 @@ static void test_action_snapshot_rides_the_remainder() {
     // бы руку занятой навсегда.
     const Acting back = acting_restore(s, /*now*/ 7u);
     CHECK(acting_what(back, ActSlot::HandL, 7u) == kActReload);
+    CHECK(act_slot(back, ActSlot::HandL).item == 42u);
     CHECK(acting_busy(back, ActSlot::HandL, 76u));
     CHECK(!acting_busy(back, ActSlot::HandL, 77u));   // 7 + 70 остатка
     CHECK(!acting_busy(back, ActSlot::HandR, 7u));

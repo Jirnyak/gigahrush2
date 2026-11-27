@@ -741,7 +741,8 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (const Senses* sen = reg.try_get<Senses>(e)) {
                 p.visibleHostiles = static_cast<float>(sen->visible);
                 p.threatDistance = sen->foeDist;
-                if (sen->foe != entt::null && reg.all_of<MobRef>(sen->foe))
+                if (sen->foe != entt::null && reg.valid(sen->foe) &&
+                    reg.all_of<MobRef>(sen->foe))
                     p.monster = 1.0f;
             } else if (rel != nullptr) {
                 // Без Senses (прямые юнит-тесты без perceive_step): фолбэк на

@@ -97,7 +97,7 @@ static_assert(kFrontierRadius ==
 void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
                                   const std::uint32_t* cells, std::size_t n) {
     const auto tFrontier = std::chrono::steady_clock::now();
-    std::vector<std::uint32_t> dirty;
+    frontierDirty_.clear();
     for (std::size_t i = 0; i < n; ++i) {
         const std::uint32_t lc = cells[i];
         if (lc >= kMacroCells) continue;
@@ -105,12 +105,13 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
         // идемпотентен, повторы на живом окне были 85-100% цены фронтира.
         if ((frontierDone_[lc >> 6] >> (lc & 63u)) & 1ull) continue;
         frontierDone_[lc >> 6] |= 1ull << (lc & 63u);
-        open_frontier_cube(world, lc, &dirty);
+        open_frontier_cube(world, lc, &frontierDirty_);
         frontierProbes_ += static_cast<std::uint64_t>(2 * kFrontierRadius + 1) *
                            (2 * kFrontierRadius + 1) * (2 * kFrontierRadius + 1);
     }
-    if (!dirty.empty()) mirror.mark_page_idx_dirty(dirty.data(), dirty.size());
-    frontierPages_ += dirty.size();
+    if (!frontierDirty_.empty())
+        mirror.mark_page_idx_dirty(frontierDirty_.data(), frontierDirty_.size());
+    frontierPages_ += frontierDirty_.size();
     frontierMs_ += std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - tFrontier)
                        .count();
@@ -648,8 +649,9 @@ void GpuMediumPass::apply_readback(World& world, VoxelMirror& mirror,
                        static_cast<std::size_t>(region) * kRbSlotCap *
                            kMaskBytesBack;
     lazyDirty_.clear();
-    std::vector<std::uint32_t> liveCis;
-    liveCis.reserve(count);
+    applyLiveCis_.clear();
+    applyLiveCis_.reserve(count);
+    auto& liveCis = applyLiveCis_;
     const bool probeDiag = std::getenv("GIGA_POUR") != nullptr;
     // ХОД A: СКОЛЬКО КИЛОБАЙТОВ ПРИЕХАЛО (слот 10 заголовка) против
     // отсканированного окна. Директория нагрузки лежит за окном

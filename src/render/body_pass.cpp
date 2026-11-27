@@ -347,11 +347,14 @@ bool BodyPass::create_pipeline(VkRenderPass renderPass, const char* shaderDir) {
     return ok;
 }
 
-void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
-                      const Registry& reg, LayerId layer, const CubePush& push,
-                      VkDescriptorSet lightGridSet, VkDescriptorSet shadowSet) {
-    const vec3 camPos{push.camPos.x, push.camPos.y, push.camPos.z};
-    const float fogEnd = push.fog.y;
+void BodyPass::upload(std::uint32_t frameIndex, const Registry& reg,
+                      LayerId layer, const vec3& camPos, float fogEnd) {
+    if (!pipeline_ || frameIndex >= kMaxFramesInFlight) {
+        lastInstanceCount_ = 0;
+        lastCubeCount_ = 0;
+        lastSphereCount_ = 0;
+        return;
+    }
     const float fogEndSq = fogEnd * fogEnd;
 
     // Toroidal (minimal-image) placement, identical to the world pass: draw each
@@ -450,8 +453,17 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     if (nSpheres)
         std::memcpy(dst + nCubes, spheres.data(),
                     nSpheres * sizeof(BodyInstance));
+    lastCubeCount_ = nCubes;
+    lastSphereCount_ = nSpheres;
     lastInstanceCount_ = count;
-    if (count == 0) return;
+}
+
+void BodyPass::draw(VkCommandBuffer cmd, std::uint32_t frameIndex,
+                    const CubePush& push, VkDescriptorSet lightGridSet,
+                    VkDescriptorSet shadowSet) const {
+    if (!pipeline_ || frameIndex >= kMaxFramesInFlight ||
+        lastInstanceCount_ == 0)
+        return;
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     if (lightGridSet != VK_NULL_HANDLE) {
@@ -466,14 +478,23 @@ void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
     VkDeviceSize offs[2] = {0, 0};
     VkBuffer bufs[2] = {cubeVerts_.buffer, instances_[frameIndex].buffer};
     vkCmdBindVertexBuffers(cmd, 0, 2, bufs, offs);
-    if (nCubes) vkCmdDraw(cmd, vertexCount_, nCubes, 0, 0);
-    if (nSpheres) {
+    if (lastCubeCount_) vkCmdDraw(cmd, vertexCount_, lastCubeCount_, 0, 0);
+    if (lastSphereCount_) {
         // Второй меш, тот же инстанс-буфер: firstInstance смещает атрибуты
         // binding 1 на хвост со сферами.
         VkDeviceSize zero = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &sphereVerts_.buffer, &zero);
-        vkCmdDraw(cmd, sphereVertexCount_, nSpheres, 0, nCubes);
+        vkCmdDraw(cmd, sphereVertexCount_, lastSphereCount_, 0, lastCubeCount_);
     }
+}
+
+void BodyPass::record(VkCommandBuffer cmd, std::uint32_t frameIndex,
+                      const Registry& reg, LayerId layer, const CubePush& push,
+                      VkDescriptorSet lightGridSet,
+                      VkDescriptorSet shadowSet) {
+    upload(frameIndex, reg, layer, vec3{push.camPos.x, push.camPos.y, push.camPos.z},
+           push.fog.y);
+    draw(cmd, frameIndex, push, lightGridSet, shadowSet);
 }
 
 void BodyPass::destroy() {

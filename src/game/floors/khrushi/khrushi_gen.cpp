@@ -30,6 +30,7 @@
 #include "world/destruct.h" // kSubMaterialName
 #include "world/lattice.h"
 #include "world/materials.h"
+#include "world/stain.h"    // kStainFieldName, StainRGB
 #include "world/subfield.h"
 #include "world/types.h"
 #include "world/world.h"
@@ -797,9 +798,12 @@ void generate_khrushi_floor(World& world, int number, const FloorSpec& spec,
     SubField<CellType>& sm =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
 
-    // Clear to air — including stale material pages from the floor this World
+    // Clear to air — including stale material/stain pages from the floor this World
     // object held before (floor streaming recycles Worlds in place).
     sm.clear();
+    if (SubField<StainRGB>* st =
+            world.subfields().find<StainRGB>(kStainFieldName))
+        st->clear();
     for (int z = 0; z < kMacroDim; ++z)
         for (int y = 0; y < kMacroDim; ++y)
             for (int x = 0; x < kMacroDim; ++x) g.clear_cell(x, y, z);

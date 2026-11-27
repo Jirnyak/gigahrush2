@@ -39,9 +39,9 @@ constexpr std::uint8_t kRepathCooldown = 16;
 
 // Cell the agent currently occupies.
 void agent_cell(const vec3& pos, int& cx, int& cy, int& cz) {
-    cx = wrap_macro(static_cast<int>(pos.x / kCellSize));
-    cy = wrap_macro(static_cast<int>(pos.y / kCellSize));
-    cz = wrap_macro(static_cast<int>(pos.z / kCellSize));
+    cx = wrap_macro(static_cast<int>(std::floor(pos.x / kCellSize)));
+    cy = wrap_macro(static_cast<int>(std::floor(pos.y / kCellSize)));
+    cz = wrap_macro(static_cast<int>(std::floor(pos.z / kCellSize)));
 }
 
 } // namespace

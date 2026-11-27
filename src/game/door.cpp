@@ -3,6 +3,7 @@
 #include <cstdio>
 
 #include "ecs/components.h"    // Transform — «тело в проёме»
+#include "game/combat.h"       // Dead, Corpse — трупы двери не открывают
 #include "game/fast_travel.h"  // лифтовые узлы — механизм-створки
 #include "game/embody.h"       // NpcRef — житель, который сам открывает дверь
 #include "game/floor_gen.h"    // floor_doorways, lift_entrance
@@ -330,6 +331,7 @@ std::uint32_t door_crowd_step(World& w, Doors& doors, Registry& reg,
     std::uint32_t opened = 0;
     std::uint64_t seen = 0;
     for (auto e : reg.view<const Transform, const NpcRef>()) {
+        if (reg.any_of<Dead, Corpse>(e)) continue;
         const Transform& t = reg.get<const Transform>(e);
         if (t.layer != layer) continue;
         if (reg.all_of<Controller>(e)) continue;  // человека ведёт кнопка E

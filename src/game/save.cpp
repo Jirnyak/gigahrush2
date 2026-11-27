@@ -331,6 +331,7 @@ void visit_acting(Ar& ar, A& a) {
         ar.u16(a.slot[i].applyTicks);
         ar.u8(a.slot[i].action);
         ar.u8(a.slot[i].applied);
+        ar.u16(a.slot[i].item);
     }
 }
 
@@ -564,8 +565,8 @@ static_assert(kInventoryWire == 64 * 5);  // v14: item u16 + count u16 + conditi
 static_assert(kRpgWire == 12);
 static_assert(kCraftingWire == 89);
 static_assert(kRangedWire == 16); // v28: таймеры рук ушли в снимок занятости
-static_assert(kCombatSaveWire == 45); // + kActingWire 24 (три окна по 8 Б)
-static_assert(kActingWire == 24);
+static_assert(kCombatSaveWire == 51); // + kActingWire 30 (три окна по 10 Б)
+static_assert(kActingWire == 30);
 static_assert(kStatusWire == 42);
 static_assert(kSamosborWire == 17);
 static_assert(kFastTravelWire == 32);
@@ -584,7 +585,7 @@ static_assert(kSaveFixedWire ==
               kLedgerWire + kPlayerWire + kRpgWire + kCraftingWire +
                   kCombatSaveWire + kStatusWire + kSamosborWire +
                   kFastTravelWire);
-static_assert(kSaveFixedWire == 626);  // v28: -8 таймеры рук, +24 снимок занятости
+static_assert(kSaveFixedWire == 632);  // v29: +6 (item u16 × 3 слота в ActingSnap)
 static_assert(kFactionWire == 36);
 // v16: the empty save carried fixed 1284 + faction 36 + header 64 + the inline
 // corpse-count u32 = 1388; v18 added the inline debris-count u32 (1392); v19
@@ -592,8 +593,8 @@ static_assert(kFactionWire == 36);
 // sections (-8): сущности этажа живут в floor_<N>.sav v3 = 1140.
 // v26: шапка 64 + фикс 610 + фракции 36 = 710 (было 1128, снято 418).
 static_assert(save_bytes_for() == kSaveHeaderWire + kSaveFixedWire + kFactionWire);
-static_assert(save_bytes_for() == 726);  // v28: 710 + 16
-static_assert(save_bytes_for(100, 50) == 726 + 150);
+static_assert(save_bytes_for() == 732);  // v29: 726 + 6
+static_assert(save_bytes_for(100, 50) == 732 + 150);
 
 // ЗДЕСЬ СТОЯЛ ЕДИНСТВЕННЫЙ В ДЕРЕВЕ ПИН `sizeof(ContractBook) == 88` — книга
 // контрактов была сериализуемой структурой, которую никто не пинил рядом с её
@@ -1079,8 +1080,10 @@ std::size_t spawn_prop_records(Registry& reg, const World& world, LayerId layer,
         if (rec.flags & kPropRecInactive)
             if (Interactable* ia = reg.try_get<Interactable>(e))
                 ia->active = false;
-        if (rec.flags & kPropRecHasContainer)
-            reg.emplace_or_replace<Container>(e, rec.box);
+        if (rec.flags & kPropRecHasContainer) {
+            Container& box = reg.emplace_or_replace<Container>(e, rec.box);
+            if (box.opened) (void)container_mark_opened(reg, e, box);
+        }
         if (rec.doorGroup != 0xFFFFFFFFu)
             reg.emplace_or_replace<DoorRef>(e, DoorRef{rec.doorGroup});
         ++made;
