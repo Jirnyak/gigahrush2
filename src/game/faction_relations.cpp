@@ -6,6 +6,7 @@
 #include "core/wrap.h"
 #include "ecs/components.h"
 #include "game/ai.h"            // decider_of — чьё это тело (S13.7a)
+#include "game/equip.h"         // Equipped — strict weapon read
 #include "game/guide.h"         // заявка ведения: ранг вместо токена
 #include "game/combat.h"        // Dead, apply_damage, entity_health, kMeleeReachSlack
 #include "game/embody.h"        // NpcRef
@@ -250,6 +251,16 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
         // рангу уже после них стрелял бы на бегу, а лицензия (единственный
         // регулятор темпа вражды) сгорала бы на телах, которые не дерутся.
         if (steer_claimed_by_stronger(reg, e, SteerRank::Feud, tick)) continue;
+        // Когда тело несёт живой мозг S13 (ai_step уже совершил хотя бы один
+        // ре-план, то есть ИИ включён), дерущийся обязан иметь IntentCombat;
+        // при отсутствии мозга или при спящем ИИ (kIntentNone) остаётся прежний
+        // пропуск по лицензии (обратная совместимость с suite_faction2 и
+        // отключённым ИИ).
+        if (const AiBrain* b = reg.try_get<AiBrain>(e)) {
+            if (b->currentIntent != kIntentNone &&
+                b->currentIntent != IntentCombat)
+                continue;
+        }
 
         // Identity-hash stagger: a body's slot is a function of its own id, so the
         // crowd spreads evenly across the period with no scheduling state.
@@ -273,11 +284,13 @@ std::uint32_t faction_feud_step(Registry& reg, NpcPool& pool,
                                 kFeudRadius);
         if (foe.e == entt::null) continue;   // nobody to fight; wander keeps steering
 
+        const Equipped* eq = reg.try_get<Equipped>(e);
         // Ranged weapon evaluation first
-        const ItemId gunId = equipped_ranged(pool.inventory(selfId));
+        const ItemId gunId = equipped_ranged(pool.inventory(selfId), eq);
         const RangedDef* rdef = ranged_for_item(gunId);
 
-        const MeleeDef* w = melee_for_item(equipped_melee(pool.inventory(selfId)));
+        const MeleeDef* w =
+            melee_for_item(equipped_melee(pool.inventory(selfId), eq));
         if (!w) w = &unarmed_melee();
 
         const float dx = wrap_delta_f(tr.pos.x, foe.pos.x, kWorldExtent);

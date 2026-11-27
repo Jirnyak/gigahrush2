@@ -534,6 +534,175 @@ static void test_revive_is_instant_suspend_is_not() {
     presence_reset();
 }
 
+// ---- 6. F2: ОСЕВШИЙ ДЕБРИС (`debris:settled`, класс 1) ---------------------
+// Проверяет:
+//   (а) летящие одиночные тела (`quietTicks < kSuspendQuietTicks`) НЕ
+//       замораживаются ни за пределами пузыря, ни внутри;
+//   (б) осевшие одиночные тела вне R=64 м замирают (`suspended`), их поза
+//       остаётся побитово неизменной, а при возврате наблюдателя (или обнулении
+//       центров) оживают мгновенно;
+//   (в) коммутация класса 1: дайджест `R = ∞` и `R = 64 м` совпадают
+//       БИТ-В-БИТ (`maxDelta == 0`);
+//   (г) несомое тело (`CarriedBy`) не замораживается.
+static void test_debris_settled_bubble() {
+    constexpr int kSettleTicks = 8 * kSimHz;
+    constexpr int kWindowTicks = 4 * kSimHz;
+
+    auto make_loose_scene = [](LevelStack& stack, Registry& reg, LayerId& layer,
+                               float cx, float cy, float dropHeight,
+                               std::vector<Entity>& outBodies) {
+        layer = stack.push_layer();
+        World& w = stack.layer(layer);
+        const int gx = static_cast<int>(cx / kCellSize);
+        const int gy = static_cast<int>(cy / kCellSize);
+        for (int y = gy - 6; y <= gy + 6; ++y)
+            for (int x = gx - 6; x <= gx + 6; ++x)
+                w.grid().fill_cell(wrap_macro(x), wrap_macro(y), 4, 1);
+        const float floorTop = 5.0f * kCellSize;
+
+        for (int i = 0; i < 4; ++i) {
+            const Entity e = reg.create();
+            reg.emplace<Transform>(
+                e, Transform{vec3{cx + static_cast<float>(i) * 1.2f, cy,
+                                  floorTop + dropHeight},
+                             layer});
+            reg.emplace<Velocity>(e);
+            if (i % 2 == 0) {
+                rigid_attach_sphere(reg, e, 0.25f, 25.0f, 0.1f, 0.7f);
+            } else {
+                rigid_attach_box(reg, e, vec3{0.25f, 0.25f, 0.20f}, 30.0f, 0.1f,
+                                 0.8f);
+            }
+            outBodies.push_back(e);
+        }
+        return floorTop;
+    };
+
+    const float bx = 20.0f * kCellSize;
+    const float by = 20.0f * kCellSize;
+    const vec3 farCentre{bx + 100.0f, by, 5.0f * kCellSize + 1.6f};
+    const vec3 nearCentre{bx + 2.0f, by, 5.0f * kCellSize + 1.6f};
+
+    // (а)+(б)+(г): летящий не замерзает, осевший замерзает, несомый не замерзает.
+    {
+        presence_reset();
+        LevelStack stack;
+        Registry reg;
+        LayerId layer = 0;
+        std::vector<Entity> bodies;
+        make_loose_scene(stack, reg, layer, bx, by, 3.0f, bodies);
+        presence_set_centers(&farCentre, 1);
+
+        // В свободном полёте (10 тиков < kSuspendQuietTicks): не застыл никто.
+        for (int t = 0; t < 10; ++t) rigid_body_step(reg, stack, kSimDt);
+        for (Entity e : bodies) {
+            const RigidBody& rb = reg.get<RigidBody>(e);
+            CHECK(rb.chain == 0u);
+            CHECK(rb.quietTicks < 32);
+            CHECK(!rb.suspended);
+        }
+
+        // Осели и набрали тишину -> застыли, зарегистрировано >= 2 потребителей.
+        for (int t = 0; t < kSettleTicks; ++t)
+            rigid_body_step(reg, stack, kSimDt);
+        CHECK(presence_consumer_count() >= 2u);
+        vec3 pos0[4];
+        quat rot0[4];
+        for (std::size_t i = 0; i < bodies.size(); ++i) {
+            const RigidBody& rb = reg.get<RigidBody>(bodies[i]);
+            CHECK(rb.asleep);
+            CHECK(rb.suspended);
+            pos0[i] = reg.get<Transform>(bodies[i]).pos;
+            rot0[i] = rb.q;
+        }
+
+        // Ещё 4 секунды вне пузыря — позы бит-в-бит.
+        for (int t = 0; t < kWindowTicks; ++t)
+            rigid_body_step(reg, stack, kSimDt);
+        for (std::size_t i = 0; i < bodies.size(); ++i) {
+            const Transform& tr = reg.get<Transform>(bodies[i]);
+            const RigidBody& rb = reg.get<RigidBody>(bodies[i]);
+            CHECK(rb.suspended);
+            CHECK(tr.pos.x == pos0[i].x && tr.pos.y == pos0[i].y &&
+                  tr.pos.z == pos0[i].z);
+            CHECK(rb.q.x == rot0[i].x && rb.q.y == rot0[i].y &&
+                  rb.q.z == rot0[i].z && rb.q.w == rot0[i].w);
+        }
+
+        // Несомое тело (CarriedBy) не застывает, даже далеко от наблюдателя.
+        const Entity carrier = reg.create();
+        reg.emplace<Transform>(carrier, Transform{vec3{bx, by, 15.0f}, layer});
+        reg.emplace<CarriedBy>(bodies[0], CarriedBy{carrier, vec3{0, 0, 0}, 0});
+        rigid_body_step(reg, stack, kSimDt);
+        CHECK(!reg.get<RigidBody>(bodies[0]).suspended);
+        CHECK(reg.get<RigidBody>(bodies[1]).suspended);
+        reg.remove<CarriedBy>(bodies[0]);
+
+        // Наблюдатель подошёл — застывшие ожили мгновенно.
+        presence_set_centers(&nearCentre, 1);
+        rigid_body_step(reg, stack, kSimDt);
+        for (Entity e : bodies) {
+            CHECK(!reg.get<RigidBody>(e).suspended);
+            CHECK(reg.get<RigidBody>(e).quietTicks < 32);
+        }
+
+        // Повторно ушёл и осел, затем наблюдатель исчез (0 центров) -> оттаяли.
+        presence_set_centers(&farCentre, 1);
+        for (int t = 0; t < kSettleTicks; ++t)
+            rigid_body_step(reg, stack, kSimDt);
+        CHECK(reg.get<RigidBody>(bodies[1]).suspended);
+        presence_set_centers(nullptr, 0);
+        rigid_body_step(reg, stack, kSimDt);
+        for (Entity e : bodies) CHECK(!reg.get<RigidBody>(e).suspended);
+    }
+
+    // (в) КЛАСС 1 КОММУТАЦИЯ БИТ-В-БИТ: R = ∞ vs R = 64 м.
+    {
+        LevelStack infStack, realStack;
+        Registry infReg, realReg;
+        LayerId infLayer = 0, realLayer = 0;
+        std::vector<Entity> infBodies, realBodies;
+
+        presence_reset();
+        presence_set_centers(&farCentre, 1);
+        presence_force_infinite(true);
+        make_loose_scene(infStack, infReg, infLayer, bx, by, 0.6f, infBodies);
+        for (int t = 0; t < kSettleTicks + kWindowTicks; ++t)
+            rigid_body_step(infReg, infStack, kSimDt);
+        for (Entity e : infBodies) {
+            CHECK(infReg.get<RigidBody>(e).asleep);
+            CHECK(!infReg.get<RigidBody>(e).suspended);
+        }
+        presence_force_infinite(false);
+        const std::uint64_t digInf =
+            bubble_digest(infReg, 0.001f, nullptr, nullptr);
+
+        presence_reset();
+        presence_set_centers(&farCentre, 1);
+        make_loose_scene(realStack, realReg, realLayer, bx, by, 0.6f, realBodies);
+        for (int t = 0; t < kSettleTicks; ++t)
+            rigid_body_step(realReg, realStack, kSimDt);
+        for (Entity e : realBodies)
+            CHECK(realReg.get<RigidBody>(e).suspended);
+        for (int t = 0; t < kWindowTicks; ++t)
+            rigid_body_step(realReg, realStack, kSimDt);
+        float maxDelta = 0.0f;
+        const std::uint64_t digReal =
+            bubble_digest(realReg, 0.001f, &maxDelta, &infReg);
+
+        std::printf("[debris-bubble] класс 1 коммутация: ∞ %016llx vs R=%.0f м "
+                    "%016llx | макс расхождение %.6f м\n",
+                    static_cast<unsigned long long>(digInf),
+                    static_cast<double>(kPresenceFullRadius),
+                    static_cast<unsigned long long>(digReal),
+                    static_cast<double>(maxDelta));
+        CHECK(digInf == digReal);
+        CHECK(maxDelta == 0.0f);
+    }
+
+    presence_reset();
+}
+
 } // namespace ragdoll_bubble_test
 
 static void test_ragdoll_bubble_all() {
@@ -542,7 +711,8 @@ static void test_ragdoll_bubble_all() {
     ragdoll_bubble_test::test_bubble_commutation_bounded();
     ragdoll_bubble_test::test_suspended_owes_the_world();
     ragdoll_bubble_test::test_revive_is_instant_suspend_is_not();
+    ragdoll_bubble_test::test_debris_settled_bubble();
     std::printf("[ragdoll-bubble] нет наблюдателя — нет пузыря, поза бит-в-бит, "
                 "коммутация в границе, долги карва/агента/взрыва, возврат "
-                "мгновенный\n");
+                "мгновенный, дебрис F2 (класс 1)\n");
 }

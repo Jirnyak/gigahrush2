@@ -45,13 +45,16 @@
 
 ---
 
-## 4. ПЯТЬ ЗАГРАДИТЕЛЬНЫХ КОЛЕЦ IRON GATE PRE-COMMIT
+## 4. ЗАГРАДИТЕЛЬНЫЕ КОЛЬЦА IRON GATE MASTER GUARD (`tools/run_all_guards.py`)
 
-При каждом коммите скрипт [`.git/hooks/pre-commit`](file:///C:/gigahrush2/.git/hooks/pre-commit) прогоняет полную проверку:
-1. `[1/5] Diff Guard` — запрет удаления тестов, ослабления ассертов и TODO в `git diff`.
-2. `[2/5] Code Invariants` — слои архитектуры L1–L6, запрет `sleep`, RFC 4180 CSV.
-3. `[3/5] Agent Barrier` — санитарный контроль от заглушек и пустых `catch`.
-4. `[4/5] Monte Carlo Dice Audit` — Кубик Тимаэрта (100–175 точек со случайными сидами).
-5. `[5/5] Quality Ratchet` — контроль монотонного пола тестов и потолка долга.
+При каждом коммите и перед завершением работы ЛЮБОЙ агент запускает единый мастер-раннер:
+`python tools/run_all_guards.py --mode=pre-commit` (или `--mode=full` для полного прогона):
+1. `[1/7] Diff Guard` (`tools/check_diff_guard.py`) — запрет удаления тестов, ослабления ассертов и TODO в `git diff`.
+2. `[2/7] Code Invariants` (`tools/check_code_invariants.py`) — слои архитектуры L1–L6, запрет `sleep`, RFC 4180 CSV.
+3. `[3/7] Agent Barrier` (`tools/check_agent_barrier.py`) — санитарный контроль от заглушек, пустых `catch` и Потёмкинских тестов.
+4. `[4/7] Source Rules` (`tools/check_source_rules.cmake`) — запрет `throw`, RTTI, GLM/Eigen, синхронность CSV.
+5. `[5/7] Quality Ratchet` (`tools/quality_ratchet.py`) — монотонный пол проверок и потолок долга.
+6. `[6/7] Monte Carlo Dice Audit` (`tools/dice_reality_audit.py`) — Кубик Тимаэрта (100–175 точек со случайными сидами).
+7. `[7/7] Inverted Mutant Killer` (`tools/dice_reality_audit.py --mutant-killer`) — 100% ликвидация мутантов с инвертированными условиями.
 
 Любой сбой блокирует коммит и выводит развернутый **Failure Manifesto на русском языке**.

@@ -98,6 +98,9 @@ layout(std430, binding = 12) buffer ActiveBits { uint uActiveBits[]; };
 // кадра, минуя вращение. Счёт лежит в uCnt[13] (не в заголовке списка):
 // CPU забирает его тем же трансфером, что и список.
 layout(std430, binding = 13) writeonly buffer PageReq { uint uPageReq[]; };
+layout(std430, binding = 14) readonly buffer FillBuf     { uint uFill[]; };     // [0]=счёт, дальше ci (Ход I)
+layout(std430, binding = 15) buffer OccBuf               { uint uOcc[]; };      // 256 KiB брик-биты + 512 Б summary (Ход D)
+layout(std430, binding = 16) readonly buffer OccPatchBuf { uint uOccPatch[]; }; // [0]=счёт, дальше ci|(nonEmpty<<31) (Ход D)
 
 layout(push_constant) uniform Push {
     ivec4 downStep; // xyz = regime_down фрейма (ровно одна компонента ±1)
@@ -250,6 +253,33 @@ bool cell_budgeted(uint ci) {
     h *= 0x846CA68Bu;
     h ^= h >> 16;
     return (h % total) < budget;
+}
+
+// --- 8³ брик-занятость (256 KiB) + summary (512 B) (Ход D, matwej.md §9.4) --
+const uint kBrickGridDim = kMacroDimU >> 3u;
+const uint kOccSummaryOff = kCells >> 5u;
+
+void occ_addr(uint ci, out uint word, out uint mask) {
+    uint cx = ci % kMacroDimU;
+    uint cy = (ci / kMacroDimU) % kMacroDimU;
+    uint cz = ci / (kMacroDimU * kMacroDimU);
+    uint brick = (cx >> 3u) + (cy >> 3u) * kBrickGridDim +
+                 (cz >> 3u) * (kBrickGridDim * kBrickGridDim);
+    uint local = (cx & 7u) | ((cy & 7u) << 3u) | ((cz & 7u) << 6u);
+    word = brick * 16u + (local >> 5u);
+    mask = 1u << (local & 31u);
+}
+
+void occ_set(uint ci) {
+    uint word, mask;
+    occ_addr(ci, word, mask);
+    atomicOr(uOcc[word], mask);
+}
+
+void occ_clear(uint ci) {
+    uint word, mask;
+    occ_addr(ci, word, mask);
+    atomicAnd(uOcc[word], ~mask);
 }
 
 uint cell_index(ivec3 c) {
@@ -567,6 +597,7 @@ void run_move(uint slot, uint threadId) {
     for (int i = 0; i < 8; ++i) {
         if (mats[i] == sv[i].mat) continue;
         store_atom(sv[i], mats[i]);
+        if (mats[i] != 0u) occ_set(sv[i].ci);
         if (sv[i].ci == ci) {
             changedOwn = true;
         } else {
@@ -705,6 +736,8 @@ void run_settle(uint slot, uint threadId) {
     uint shift = (ci & 3u) * 8u;
     atomicAnd(uClass[ci >> 2], ~(0x03u << shift));
     atomicOr(uClass[ci >> 2], cls << shift);
+    if (cls != 0u) occ_set(ci);
+    else occ_clear(ci);
 
     atomicAdd(uCnt[8], min(sQuanta, 512u));
     // GPU-честное «сухая живая»: ноль подвижных квантов в клетке этого
@@ -940,6 +973,64 @@ void run_pack_header() {
     uRbList[listBase + 11u] = uCnt[15]; // живые с нулём квантов, голосов
 }
 
+// FILL (Ход I, matwej.md §9.4): 1 воркгруппа = 1 свежематериализованная клетка.
+// Заполняет 512 субвокселей uPagePool по точному закону materialize_sub_page
+// ([world/destruct.cpp]), заменяя 1102 Б/клетку стейджинга на 4 Б pageIdx + 4 Б ci.
+shared uint sMaskNonZero;
+
+void run_fill(uint slot, uint threadId) {
+    if (slot >= uFill[0]) return;
+    uint ci = uFill[1u + slot];
+    uint pg = uPageIdx[ci];
+    if (pg == kNoPage) return;
+    if (threadId == 0u) sMaskNonZero = 0u;
+    barrier();
+    if (threadId < 16u && uMasks[ci * 16u + threadId] != 0u)
+        sMaskNonZero = 1u;
+    barrier();
+    uint base = cell_type(ci);
+    bool uniformMedium = (sMaskNonZero == 0u) && (base != 0u) &&
+                         (base < kMatSurfaceCount) &&
+                         (kMatMedium[base].x > 0.0 || kMatMedium[base].y > 0.0);
+    uint mw = ci * 16u + (threadId >> 2u);
+    uint msh = (threadId & 3u) * 8u;
+    uint mbyte = (uMasks[mw] >> msh) & 0xFFu;
+    for (uint p = 0u; p < 4u; ++p) {
+        uint m0 = (uniformMedium || ((mbyte >> (p * 2u)) & 1u) != 0u) ? base : 0u;
+        uint m1 = (uniformMedium || ((mbyte >> (p * 2u + 1u)) & 1u) != 0u) ? base : 0u;
+        uPagePool[pg * 256u + threadId * 4u + p] =
+            (m0 & 0xFFFFu) | ((m1 & 0xFFFFu) << 16u);
+    }
+}
+
+// OCC PATCH (Ход D): атомарное обновление битов uOcc для dirty-клеток CPU без
+// перезаписи соседних GPU-клеток целым uint32-словом.
+void run_occ_patch(uint i) {
+    if (i >= uOccPatch[0]) return;
+    uint packed = uOccPatch[1u + i];
+    uint ci = packed & 0x7FFFFFFFu;
+    if ((packed & 0x80000000u) != 0u) occ_set(ci);
+    else occ_clear(ci);
+}
+
+// OCC SUMMARY (Ход D): точная OR-сводка 16³ бриков по 256 KiB uOcc (128 групп,
+// по 32 брика = 512 u32-слов на группу). Снимает все гонки сброса 1->0.
+shared uint sBrickSum;
+
+void run_occ_summary(uint wg, uint threadId) {
+    if (wg >= (kCells >> 14u)) return;
+    if (threadId == 0u) sBrickSum = 0u;
+    barrier();
+    uint base = wg * 512u;
+    for (uint k = 0u; k < 8u; ++k) {
+        uint idx = k * 64u + threadId;
+        if (uOcc[base + idx] != 0u)
+            atomicOr(sBrickSum, 1u << (idx >> 4u));
+    }
+    barrier();
+    if (threadId == 0u) uOcc[kOccSummaryOff + wg] = sBrickSum;
+}
+
 // Слот исполнителя из 2D-складки FINALIZE. Условие «slot >= счёт» единообразно
 // на всю воркгруппу (слот — функция gl_WorkGroupID) — ранний выход до
 // барьеров settle легален.
@@ -961,6 +1052,8 @@ void main() {
         run_settle(slot, gl_LocalInvocationID.x);
     } else if (mode == 3u) {
         run_inject(gl_GlobalInvocationID.x);
+    } else if (mode == 4u) {
+        run_pack(folded_slot(), gl_LocalInvocationID.x);
     } else if (mode == 5u) {
         // Мода 5 освободилась смертью ping-pong протокола (kModeRelease) —
         // её занял заголовок пака (ход A).
@@ -969,7 +1062,11 @@ void main() {
         run_gate32(gl_GlobalInvocationID.x);
     } else if (mode == 7u) {
         if (gl_GlobalInvocationID.x == 0u) run_finalize();
-    } else {
-        run_pack(folded_slot(), gl_LocalInvocationID.x);
+    } else if (mode == 8u) {
+        run_fill(folded_slot(), gl_LocalInvocationID.x);
+    } else if (mode == 9u) {
+        run_occ_patch(gl_GlobalInvocationID.x);
+    } else if (mode == 10u) {
+        run_occ_summary(gl_WorkGroupID.x, gl_LocalInvocationID.x);
     }
 }

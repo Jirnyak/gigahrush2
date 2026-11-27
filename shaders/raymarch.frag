@@ -71,7 +71,8 @@ layout(set = 0, binding = 5) uniform MarchUbo {
 bool mat_has_map(uint lo, uint hi, uint mid) {
     return ((mid < 32u ? (lo >> mid) : (hi >> (mid - 32u))) & 1u) != 0u;
 }
-// binding 6 (fluid) УМЕР: воду двигает и рисует мир-автомат (страницы).
+// binding 6 (Ход D, matwej.md §9.2/§9.4): 256 KiB брик-биты занятости 8³ + 512 Б summary 16³.
+layout(set = 0, binding = 6, std430) readonly buffer OccBuf { uint uOcc[]; };
 layout(set = 0, binding = 7, std430) readonly buffer StainIdxBuf { uint uStainIdx[]; }; // 1/cell
 layout(set = 0, binding = 8, std430) readonly buffer StainPool { uint uStainPool[]; };  // 512 u32/page (RGBA8)
 
@@ -180,12 +181,29 @@ const float kGamma = 2.2;
 // == voxel fetch ==============================================================
 // =============================================================================
 const int kMacroDim = GIGA_MACRO_DIM;         // -D из CMakeLists <- world/types.h
+const uint kMacroDimU = uint(kMacroDim);
+const uint kBrickGridDim = kMacroDimU >> 3u;
+const uint kOccSummaryOff = (kMacroDimU * kMacroDimU * kMacroDimU) >> 5u;
 const float kCell = GIGA_CELL_SIZE;
 const float kVoxel = kCell / float(GIGA_SUB_DIM);
 
 uint cell_index(ivec3 c) {
     c &= (kMacroDim - 1); // torus: power-of-two wrap is one AND per axis
     return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+}
+
+uint brick_index_wrapped(ivec3 wc) {
+    return uint(wc.x >> 3) + uint(wc.y >> 3) * kBrickGridDim +
+           uint(wc.z >> 3) * (kBrickGridDim * kBrickGridDim);
+}
+
+bool brick_non_empty(uint brickIdx) {
+    return ((uOcc[kOccSummaryOff + (brickIdx >> 5u)] >> (brickIdx & 31u)) & 1u) != 0u;
+}
+
+bool cell_occupied(ivec3 wc, uint brickIdx) {
+    uint local = uint(wc.x & 7) | (uint(wc.y & 7) << 3u) | (uint(wc.z & 7) << 6u);
+    return ((uOcc[brickIdx * 16u + (local >> 5u)] >> (local & 31u)) & 1u) != 0u;
 }
 
 const uint kClassBaseMask = 3u;
@@ -229,7 +247,10 @@ vec3 sub_stain(uint ci, ivec3 s) {
 // Solidity of one sub-voxel by GLOBAL (unwrapped) sub coordinates — the AO taps.
 bool sub_solid_global(ivec3 g) {
     ivec3 c = ivec3(floor(vec3(g) / 8.0));
-    uint ci = cell_index(c);
+    ivec3 wc = c & (kMacroDim - 1);
+    uint bi = brick_index_wrapped(wc);
+    if (!brick_non_empty(bi) || !cell_occupied(wc, bi)) return false;
+    uint ci = uint(wc.x) | (uint(wc.y) << 7) | (uint(wc.z) << 14);
     uint cls = cell_class(ci) & kClassBaseMask;
     if (cls == 0u) return false;
     if (cls == 1u) return true;
@@ -382,56 +403,85 @@ Hit march(vec3 ro, vec3 rd, float tCap) {
 
     // 64-cell fog radius; sqrt(3) diagonal and slack bound the loop.
     for (int i = 0; i < 224; ++i) {
-        uint ci = cell_index(c);
-        uint cls = cell_class(ci) & kClassBaseMask;
-        if (cls != 0u) {
-            // ЗАМЕР kMarchOpaque: клетка непрозрачна целиком, внутренний марш
-            // не исполняется.
-            if (measure == kMarchOpaque) {
-                h.t = t;
-                h.n = vec3(0.0);
-                if (axis >= 0) h.n[axis] = -float(stp[axis]);
-                else h.n = -rd;
-                h.mat = sub_mat(ci, ivec3(4));
-                h.ci = ci;
-                h.sub = ivec3(4);
-                h.ok = true;
-                return h;
+        ivec3 wc = c & (kMacroDim - 1);
+        uint bi = brick_index_wrapped(wc);
+        if (!brick_non_empty(bi)) {
+            ivec3 bc = ivec3(c.x >> 3, c.y >> 3, c.z >> 3);
+            ivec3 rem = ivec3(
+                stp.x > 0 ? (8 - (c.x & 7)) : ((c.x & 7) + 1),
+                stp.y > 0 ? (8 - (c.y & 7)) : ((c.y & 7) + 1),
+                stp.z > 0 ? (8 - (c.z & 7)) : ((c.z & 7) + 1));
+            vec3 bMax = tMax + vec3(rem - 1) * tDelta;
+            axis = bMax.x < bMax.y ? (bMax.x < bMax.z ? 0 : 2)
+                                   : (bMax.y < bMax.z ? 1 : 2);
+            t = bMax[axis];
+            if (t > tCap) break;
+            for (int k = 0; k < 3; ++k) {
+                if (k == axis) {
+                    c[k] += stp[k] * rem[k];
+                    tMax[k] = bMax[k] + tDelta[k];
+                } else if (t >= tMax[k]) {
+                    int steps = int(floor((t - tMax[k]) / tDelta[k])) + 1;
+                    int maxS = stp[k] > 0 ? (bc[k] * 8 + 7 - c[k]) : (c[k] - bc[k] * 8);
+                    steps = clamp(steps, 0, maxS);
+                    c[k] += stp[k] * steps;
+                    tMax[k] += float(steps) * tDelta[k];
+                }
             }
-            float tExit = min(min(tMax.x, tMax.y), tMax.z);
-            bool glassEntry = false;
-            if (cls == 1u) {
-                // Fully solid: the entry face is the hit — no bit tests…
-                vec3 q = ro + rd * (t + 1e-4);
-                ivec3 s = clamp(ivec3(floor((q - vec3(c) * kCell) / kVoxel)),
-                                ivec3(0), ivec3(7));
-                uint em = sub_mat(ci, s);
-                uint emi = min(em, kMatSurfaceCount - 1u);
-                // …если только вход не стеклянный: цельностеклянная клетка
-                // (sphere glass) идёт битовым маршем со стеклянным пропуском.
-                glassEntry =
-                    kMatLightPass[emi] == 1u && kMatEmissive[emi] == 0.0;
-                if (!glassEntry) {
+            continue;
+        }
+        if (cell_occupied(wc, bi)) {
+            uint ci = uint(wc.x) | (uint(wc.y) << 7) | (uint(wc.z) << 14);
+            uint cls = cell_class(ci) & kClassBaseMask;
+            if (cls != 0u) {
+                // ЗАМЕР kMarchOpaque: клетка непрозрачна целиком, внутренний марш
+                // не исполняется.
+                if (measure == kMarchOpaque) {
                     h.t = t;
                     h.n = vec3(0.0);
                     if (axis >= 0) h.n[axis] = -float(stp[axis]);
                     else h.n = -rd;
-                    h.mat = em;
+                    h.mat = sub_mat(ci, ivec3(4));
                     h.ci = ci;
-                    h.sub = s;
+                    h.sub = ivec3(4);
                     h.ok = true;
                     return h;
                 }
+                float tExit = min(min(tMax.x, tMax.y), tMax.z);
+                bool glassEntry = false;
+                if (cls == 1u) {
+                    // Fully solid: the entry face is the hit — no bit tests…
+                    vec3 q = ro + rd * (t + 1e-4);
+                    ivec3 s = clamp(ivec3(floor((q - vec3(c) * kCell) / kVoxel)),
+                                    ivec3(0), ivec3(7));
+                    uint em = sub_mat(ci, s);
+                    uint emi = min(em, kMatSurfaceCount - 1u);
+                    // …если только вход не стеклянный: цельностеклянная клетка
+                    // (sphere glass) идёт битовым маршем со стеклянным пропуском.
+                    glassEntry =
+                        kMatLightPass[emi] == 1u && kMatEmissive[emi] == 0.0;
+                    if (!glassEntry) {
+                        h.t = t;
+                        h.n = vec3(0.0);
+                        if (axis >= 0) h.n[axis] = -float(stp[axis]);
+                        else h.n = -rd;
+                        h.mat = em;
+                        h.ci = ci;
+                        h.sub = s;
+                        h.ok = true;
+                        return h;
+                    }
+                }
+                if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
+                               min(tExit, tCap), axis, cls == 3u, h))
+                    return h;
+                // Ход J (matwej.md §9.4): остановка марша по непрозрачности сред.
+                // exp(-5.6) = 0.003698 < 1/255 (= 0.003922) — поверхность за толщей
+                // среды ниже порога 8-битного квантования (при kAbsorbLiquid=0.55
+                // это ~10.2 м воды вместо марша до 128 м; в сухом воздухе gMediaDepth
+                // равен 0 и пустые клетки сюда не входят).
+                if (gMediaDepth > 5.6) break;
             }
-            if (march_cell(ci, ro, rd, rinv, stp, vec3(c) * kCell, t,
-                           min(tExit, tCap), axis, cls == 3u, h))
-                return h;
-            // Ход J (matwej.md §9.4): остановка марша по непрозрачности сред.
-            // exp(-5.6) = 0.003698 < 1/255 (= 0.003922) — поверхность за толщей
-            // среды ниже порога 8-битного квантования (при kAbsorbLiquid=0.55
-            // это ~10.2 м воды вместо марша до 128 м; в сухом воздухе gMediaDepth
-            // равен 0 и пустые клетки сюда не входят).
-            if (gMediaDepth > 5.6) break;
         }
         axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                : (tMax.y < tMax.z ? 1 : 2);
@@ -535,17 +585,46 @@ float giga_shadow(vec3 p, vec3 dirToLight, float dist) {
     vec3 tDelta = vec3(kCell) * abs(rinv);
     float t = 0.0;
     for (int i = 0; i < 224; ++i) {
-        uint ci = cell_index(c);
-        uint cls = cell_class(ci);
-        // Полная клетка без light-pass материалов (cls == 1u) перекрыта без
-        // бит-тестов; полная со стеклом/неоном (cls == 5u) идёт в sub-DDA.
-        if (cls == 1u) return 0.0;
-        if (cls != 0u) {
-            float tExit = min(min(tMax.x, tMax.y), tMax.z);
-            if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
-                                     min(tExit, dist),
-                                     (cls & kClassLightPass) != 0u))
-                return 0.0;
+        ivec3 wc = c & (kMacroDim - 1);
+        uint bi = brick_index_wrapped(wc);
+        if (!brick_non_empty(bi)) {
+            ivec3 bc = ivec3(c.x >> 3, c.y >> 3, c.z >> 3);
+            ivec3 rem = ivec3(
+                stp.x > 0 ? (8 - (c.x & 7)) : ((c.x & 7) + 1),
+                stp.y > 0 ? (8 - (c.y & 7)) : ((c.y & 7) + 1),
+                stp.z > 0 ? (8 - (c.z & 7)) : ((c.z & 7) + 1));
+            vec3 bMax = tMax + vec3(rem - 1) * tDelta;
+            int axis = bMax.x < bMax.y ? (bMax.x < bMax.z ? 0 : 2)
+                                       : (bMax.y < bMax.z ? 1 : 2);
+            t = bMax[axis];
+            if (t > dist) return 1.0;
+            for (int k = 0; k < 3; ++k) {
+                if (k == axis) {
+                    c[k] += stp[k] * rem[k];
+                    tMax[k] = bMax[k] + tDelta[k];
+                } else if (t >= tMax[k]) {
+                    int steps = int(floor((t - tMax[k]) / tDelta[k])) + 1;
+                    int maxS = stp[k] > 0 ? (bc[k] * 8 + 7 - c[k]) : (c[k] - bc[k] * 8);
+                    steps = clamp(steps, 0, maxS);
+                    c[k] += stp[k] * steps;
+                    tMax[k] += float(steps) * tDelta[k];
+                }
+            }
+            continue;
+        }
+        if (cell_occupied(wc, bi)) {
+            uint ci = uint(wc.x) | (uint(wc.y) << 7) | (uint(wc.z) << 14);
+            uint cls = cell_class(ci);
+            // Полная клетка без light-pass материалов (cls == 1u) перекрыта без
+            // бит-тестов; полная со стеклом/неоном (cls == 5u) идёт в sub-DDA.
+            if (cls == 1u) return 0.0;
+            if (cls != 0u) {
+                float tExit = min(min(tMax.x, tMax.y), tMax.z);
+                if (shadow_cell_occluded(ci, p, rd, rinv, stp, vec3(c) * kCell, t,
+                                         min(tExit, dist),
+                                         (cls & kClassLightPass) != 0u))
+                    return 0.0;
+            }
         }
         int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                    : (tMax.y < tMax.z ? 1 : 2);

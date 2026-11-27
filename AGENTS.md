@@ -424,12 +424,18 @@ Rules that came out of it, and they generalise past pipes:
    ГДЕ / СИММЕТРИЯ / МОДЕЛЬ / БЮДЖЕТ / ПРОВЕРКА — [problems.md] §11) and make the
    test print exactly those.
 
-## Workflow Checklist
+## Workflow Checklist & Iron Gate Defense
 
 1. Make the smallest change that solves the problem.
-2. Build clean (no warnings) and run `ctest`.
-3. New shader → confirm it compiles (glslc runs in the build).
-4. Update the relevant system `.md` **only** if you added a real subsystem or
+2. Build clean (no warnings) and run the full master guard:
+   ```bash
+   python tools/run_all_guards.py --mode=pre-commit    # Fast static & diff defense (< 25s)
+   python tools/run_all_guards.py --mode=full          # Full defense: all static gates + CTest
+   ```
+   Or on Windows: `tools\run_all_guards.bat --mode=pre-commit`.
+3. CTest must report 100% PASS with 0 failures (`PASS_REGULAR_EXPRESSION` matched).
+4. New shader → confirm it compiles (glslc runs in the build).
+5. Update the relevant system `.md` **only** if you added a real subsystem or
    changed a documented contract; do not document trivial edits.
-5. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
+6. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
    Documentation lives in the per-system docs orchestrated by the README.

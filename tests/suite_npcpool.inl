@@ -1002,4 +1002,59 @@ static void test_npcpool_all() {
         std::printf("  npcpool: %.3f ms/macro-step never-reclaim vs %.3f ms/macro-step "
                     "recycling (printed, not asserted)\n", wall.ms, open.ms);
     }
+
+    { // ---- U2.5: seed_floor_from_spec sets deterministic Cyrillic names within budget ----
+        NpcPool p1;
+        NpcPool p2;
+        p1.init();
+        p2.init();
+        const std::size_t eager = p1.resident_bytes();
+        const FloorSpec& spec = floor_spec(FloorKind::Residential);
+        CHECK(seed_floor_from_spec(p1, 0, spec, 4242u) != kInvalidNpc);
+        CHECK(seed_floor_from_spec(p2, 0, spec, 4242u) != kInvalidNpc);
+        CHECK(p1.count() == spec.population);
+
+        bool allNamed = true;
+        bool allMatch = true;
+        bool allValidUtf8 = true;
+        for (NpcId id = 0; id < p1.count(); ++id) {
+            const char* fn = p1.name(id).data();
+            const char* ln = p1.surname(id).data();
+            if (fn[0] == '\0' || ln[0] == '\0') allNamed = false;
+            if (std::strcmp(fn, p2.name(id).data()) != 0 ||
+                std::strcmp(ln, p2.surname(id).data()) != 0)
+                allMatch = false;
+            // Every byte sequence is <= 22 bytes (< kNameLen) and valid UTF-8.
+            auto valid_utf8 = [](const char* s) {
+                const auto* u = reinterpret_cast<const unsigned char*>(s);
+                std::size_t i = 0;
+                while (u[i] != '\0') {
+                    if (u[i] < 0x80u) {
+                        ++i;
+                    } else if ((u[i] & 0xE0u) == 0xC0u) {
+                        if ((u[i + 1] & 0xC0u) != 0x80u) return false;
+                        i += 2;
+                    } else {
+                        return false;
+                    }
+                }
+                return i < static_cast<std::size_t>(kNameLen);
+            };
+            if (!valid_utf8(fn) || !valid_utf8(ln)) allValidUtf8 = false;
+        }
+        CHECK(allNamed);
+        CHECK(allMatch);
+        CHECK(allValidUtf8);
+
+        // Memory budget check: LIVE (5 B) + name_ (24 B) + surname_ (24 B) = 53 B/row
+        // across kNpcLazyChunk (4096), well under 256 B/live row and 1 GiB at 2^20.
+        const std::size_t after = p1.resident_bytes();
+        CHECK(after > eager);
+        const double perRowAt4k =
+            static_cast<double>(after - eager) / static_cast<double>(kNpcLazyChunk);
+        CHECK(perRowAt4k <= 256.0);
+        const double proj2e20 =
+            static_cast<double>(eager) + perRowAt4k * static_cast<double>(kNpcPoolSize);
+        CHECK(proj2e20 <= 1024.0 * 1024.0 * 1024.0);
+    }
 }

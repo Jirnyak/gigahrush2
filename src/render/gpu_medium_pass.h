@@ -92,6 +92,10 @@ public:
     // «4096» в шейдере разъехалась бы с этой МОЛЧА (дефект К1-12). Та же
     // строка стоит в [shaders/medium_sim.comp] (kPageReqCap), источник один.
     static constexpr std::uint32_t kPageReqCap = kRbSlotCap / 2;
+    // Капы Хода I (4 Б фронтир -> kModeFill) и Хода D (CPU occ-патчи ->
+    // kModeOccPatch): синхронизированы с VoxelMirror::kMax*PerFlush.
+    static constexpr std::uint32_t kFillCap = 131072u;
+    static constexpr std::uint32_t kOccPatchCap = 131072u;
     // Слоты КАДРОВЫХ счётчиков в counters_ (свободными остались 6 и 7).
     // Соседство обязательно: обнуляются одним vkCmdFillBuffer на 8 байт, и
     // в record_substeps это закреплено static_assert'ом.
@@ -188,6 +192,7 @@ public:
         pageReqTaken_ = 0;
         pageReqPages_ = 0;
         pageReqFrames_ = 0;
+        lastPatchFlushGen_ = 0xFFFFFFFFu;
         for (auto& r : rbRing_) r.valid = false;
         // Поколение шва — В НОЛЬ СИНХРОННО (гейт свежести живёт на клоке
         // ЗЕРКАЛА и смену слоя переживает сам — flushGen монотонен).
@@ -291,6 +296,7 @@ private:
     void drain_page_requests(World& world, VoxelMirror& mirror);
 
     VulkanDevice* dev_ = nullptr;
+    const VoxelMirror* mirror_ = nullptr;
 
     VkBuffer mirrorPool_ = VK_NULL_HANDLE;  // pagePool зеркала
     VkBuffer mirrorMasks_ = VK_NULL_HANDLE; // masks зеркала
@@ -310,7 +316,10 @@ private:
     // Инжект писателей: слот на кадр в полёте.
     static constexpr std::uint32_t kAppendCap = 8192u;
     VulkanBuffer appendBuf_[kMaxFramesInFlight];
+    VulkanBuffer fillBuf_[kMaxFramesInFlight];     // Ход I: список ci для kModeFill
+    VulkanBuffer occPatchBuf_[kMaxFramesInFlight]; // Ход D: (ci | nonEmpty<<31) для kModeOccPatch
     std::vector<std::uint32_t> appendPending_;
+    std::uint32_t lastPatchFlushGen_ = 0xFFFFFFFFu;
     // ПРИБОР ФРОНТИРА (перф-заход 2026-09-23): цена раскрытия округи за этаж
     // — мс и страниц. Печатается, когда очередь будильника допита: «сколько
     // стоил транзиент входа» одним числом, а не догадкой. Сброс — clear_live().

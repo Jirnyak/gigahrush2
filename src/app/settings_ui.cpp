@@ -1,6 +1,7 @@
 #include "app/settings_ui.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include <SDL3/SDL_keyboard.h>
 #include <imgui.h>
@@ -139,11 +140,15 @@ constexpr SettingsTab kTabs[] = {
 
 } // namespace
 
-SettingsRequest settings_ui_draw(SettingsCtx& ctx) {
+SettingsRequest settings_ui_draw(SettingsCtx& ctx, const char* selectTab) {
     SettingsRequest req;
     if (ImGui::BeginTabBar("##settings_tabs")) {
         for (const SettingsTab& t : kTabs) {
-            if (!ImGui::BeginTabItem(t.label)) continue;
+            const ImGuiTabItemFlags flags =
+                (selectTab && std::strcmp(t.id, selectTab) == 0)
+                    ? ImGuiTabItemFlags_SetSelected
+                    : ImGuiTabItemFlags_None;
+            if (!ImGui::BeginTabItem(t.label, nullptr, flags)) continue;
             ImGui::Spacing();
             t.draw(ctx, req);
             ImGui::Spacing();

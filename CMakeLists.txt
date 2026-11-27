@@ -3154,6 +3154,12 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(quality_ratchet PROPERTIES
         PASS_REGULAR_EXPRESSION "QUALITY RATCHET.*PASS")
 
+    # Верховный страж всех колец обороны (The Master Guard: 7 Iron Rings)
+    add_test(NAME master_guards
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_all_guards.py --mode=pre-commit)
+    set_tests_properties(master_guards PROPERTIES
+        PASS_REGULAR_EXPRESSION "ЗАГРАДИТЕЛЬНЫХ ГЕЙТОВ И СЬЮТОВ ПРОЙДЕНЫ СО 100% УСПЕХОМ")
+
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у
     # `git status --short`, который стоит первым шагом каждой сессии.

@@ -32,6 +32,7 @@ enum class AppScreen : std::uint8_t {
     Menu,     // стартовый экран (страницы в UiShell::menuPage)
     Playing,  // сим тикает, ввод у тела (если окно не открыто)
     Pause,    // Esc из игры: сим заморожен, поверх — страницы меню
+    RunOver,  // выживших на слое не осталось: сводка RunLedger и перезапуск
 };
 
 enum class UiWindow : std::uint8_t {
@@ -50,6 +51,7 @@ struct UiShell {
     AppScreen screen = AppScreen::Intro;
     UiWindow window = UiWindow::None;  // осмысленно только в Playing
     int menuPage = 0;  // 0 root, 1 load, 2 new-game, 3 settings (Menu и Pause)
+    const char* settingsTab = nullptr; // одноразовый фокус вкладки настроек ("controls")
 
     bool playing() const { return screen == AppScreen::Playing; }
     bool sim_frozen() const { return screen != AppScreen::Playing; }

@@ -19,14 +19,34 @@ layout(set = GIGA_SHADOW_SET, binding = 0, std430) readonly buffer ShadowMaskBuf
 layout(set = GIGA_SHADOW_SET, binding = 1, std430) readonly buffer ShadowClassBuf {
     uint sClass[]; // 4 клетки на uint: 0 пусто, 1 цельно, 2 частично
 };
+layout(set = GIGA_SHADOW_SET, binding = 2, std430) readonly buffer ShadowOccBuf {
+    uint sOcc[]; // 256 KiB брик-биты 8³ + 512 Б summary 16³ (Ход D)
+};
 
 const int   kSmMacroDim = GIGA_MACRO_DIM; // -D из CMakeLists <- world/types.h
+const uint  kSmMacroDimU = uint(kSmMacroDim);
+const uint  kSmBrickGridDim = kSmMacroDimU >> 3u;
+const uint  kSmOccSummaryOff = (kSmMacroDimU * kSmMacroDimU * kSmMacroDimU) >> 5u;
 const float kSmCell = GIGA_CELL_SIZE;
 const float kSmVoxel = kSmCell / float(GIGA_SUB_DIM);
 
 uint sm_cell_index(ivec3 c) {
     c &= (kSmMacroDim - 1); // тор: врап на битовом И
     return uint(c.x) | (uint(c.y) << 7) | (uint(c.z) << 14);
+}
+
+uint sm_brick_index_wrapped(ivec3 wc) {
+    return uint(wc.x >> 3) + uint(wc.y >> 3) * kSmBrickGridDim +
+           uint(wc.z >> 3) * (kSmBrickGridDim * kSmBrickGridDim);
+}
+
+bool sm_brick_non_empty(uint brickIdx) {
+    return ((sOcc[kSmOccSummaryOff + (brickIdx >> 5u)] >> (brickIdx & 31u)) & 1u) != 0u;
+}
+
+bool sm_cell_occupied(ivec3 wc, uint brickIdx) {
+    uint local = uint(wc.x & 7) | (uint(wc.y & 7) << 3u) | (uint(wc.z & 7) << 6u);
+    return ((sOcc[brickIdx * 16u + (local >> 5u)] >> (local & 31u)) & 1u) != 0u;
 }
 
 uint sm_class(uint ci) {
@@ -78,17 +98,46 @@ float giga_shadow(vec3 ro, vec3 rd, float dist) {
 
     // Радиус света <= 48 м = 24 клетки; sqrt(3)-диагональ и запас держат цикл.
     for (int i = 0; i < 96; ++i) {
-        uint ci = sm_cell_index(c);
-        uint cls = sm_class(ci) & 3u;
-        if (cls == 1u) return 0.0; // цельная клетка — свет не пройдёт
-        float tExit = min(min(tMax.x, tMax.y), tMax.z);
-        // 2 = частичная, 3 = частичная С МАТЕРИЕЙ СРЕД (S16): тень считается
-        // по МАСКЕ в обеих — пол в клетке с лужей затеняет как затенял, сама
-        // вода (без бита) тень не бросает.
-        if (cls >= 2u &&
-            sm_cell_blocked(ci, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
-                            min(tExit, dist)))
-            return 0.0;
+        ivec3 wc = c & (kSmMacroDim - 1);
+        uint bi = sm_brick_index_wrapped(wc);
+        if (!sm_brick_non_empty(bi)) {
+            ivec3 bc = ivec3(c.x >> 3, c.y >> 3, c.z >> 3);
+            ivec3 rem = ivec3(
+                stp.x > 0 ? (8 - (c.x & 7)) : ((c.x & 7) + 1),
+                stp.y > 0 ? (8 - (c.y & 7)) : ((c.y & 7) + 1),
+                stp.z > 0 ? (8 - (c.z & 7)) : ((c.z & 7) + 1));
+            vec3 bMax = tMax + vec3(rem - 1) * tDelta;
+            int axis = bMax.x < bMax.y ? (bMax.x < bMax.z ? 0 : 2)
+                                       : (bMax.y < bMax.z ? 1 : 2);
+            t = bMax[axis];
+            if (t > dist) return 1.0;
+            for (int k = 0; k < 3; ++k) {
+                if (k == axis) {
+                    c[k] += stp[k] * rem[k];
+                    tMax[k] = bMax[k] + tDelta[k];
+                } else if (t >= tMax[k]) {
+                    int steps = int(floor((t - tMax[k]) / tDelta[k])) + 1;
+                    int maxS = stp[k] > 0 ? (bc[k] * 8 + 7 - c[k]) : (c[k] - bc[k] * 8);
+                    steps = clamp(steps, 0, maxS);
+                    c[k] += stp[k] * steps;
+                    tMax[k] += float(steps) * tDelta[k];
+                }
+            }
+            continue;
+        }
+        if (sm_cell_occupied(wc, bi)) {
+            uint ci = uint(wc.x) | (uint(wc.y) << 7) | (uint(wc.z) << 14);
+            uint cls = sm_class(ci) & 3u;
+            if (cls == 1u) return 0.0; // цельная клетка — свет не пройдёт
+            float tExit = min(min(tMax.x, tMax.y), tMax.z);
+            // 2 = частичная, 3 = частичная С МАТЕРИЕЙ СРЕД (S16): тень считается
+            // по МАСКЕ в обеих — пол в клетке с лужей затеняет как затенял, сама
+            // вода (без бита) тень не бросает.
+            if (cls >= 2u &&
+                sm_cell_blocked(ci, ro, rd, rinv, stp, vec3(c) * kSmCell, t,
+                                min(tExit, dist)))
+                return 0.0;
+        }
         int axis = tMax.x < tMax.y ? (tMax.x < tMax.z ? 0 : 2)
                                    : (tMax.y < tMax.z ? 1 : 2);
         t = tMax[axis];

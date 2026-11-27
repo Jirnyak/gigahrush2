@@ -356,6 +356,26 @@ static void test_chronicle_line_is_a_view() {
     const std::size_t m = fact_line(*g, pool, 1000u, tiny, sizeof(tiny));
     CHECK(m == sizeof(tiny) - 1);
     CHECK(tiny[sizeof(tiny) - 1] == '\0');
+
+    // U2.5: при заполненном имени и фамилии в летописи видны и Имя Фамилия,
+    // и фракция (а не безликое #id).
+    const NpcId c = pool.spawn();
+    const NpcId d = pool.spawn();
+    pool.faction(c) = static_cast<std::uint16_t>(Faction::Liquidators);
+    pool.faction(d) = static_cast<std::uint16_t>(Faction::Cultists);
+    pool.set_name(c, "Иван", "Петров");
+    pool.set_name(d, "Анна", "Волкова");
+    CHECK(ch.file(1100u, kVerbStrike, c, d, 0, 19u));
+    const Fact* named = ch.bucket_head(19u);
+    CHECK(named != nullptr);
+    char lineNamed[256] = {};
+    const std::size_t nn =
+        fact_line(*named, pool, 1100u, lineNamed, sizeof(lineNamed));
+    CHECK(nn > 0 && nn < sizeof(lineNamed));
+    CHECK(std::strstr(lineNamed, "Иван Петров") != nullptr);
+    CHECK(std::strstr(lineNamed, "Анна Волкова") != nullptr);
+    CHECK(std::strstr(lineNamed, faction_name(Faction::Liquidators)) != nullptr);
+    CHECK(std::strstr(lineNamed, faction_name(Faction::Cultists)) != nullptr);
 }
 
 } // namespace chronicle_suite

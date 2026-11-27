@@ -43,6 +43,9 @@ struct SettingsRequest {
 
 // Нарисовать СОДЕРЖИМОЕ настроек (таб-бар + вкладки) внутрь уже открытого
 // окна вызывающего — меню и пауза владеют своим окном и кнопкой Back сами.
-SettingsRequest settings_ui_draw(SettingsCtx& ctx);
+// `selectTab` (необязательно): id вкладки (например "controls"), которую
+// нужно принудительно открыть в этом кадре.
+SettingsRequest settings_ui_draw(SettingsCtx& ctx,
+                                   const char* selectTab = nullptr);
 
 } // namespace giga

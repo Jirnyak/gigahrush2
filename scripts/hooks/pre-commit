@@ -1,7 +1,7 @@
 #!/bin/sh
 # =============================================================================
-# GIGAHRUSH 2 — THE IRON GATE & ANTI-SLOP PRE-COMMIT GUARD (5-GATE SUITE)
-# Modeled after Dental CRM & Timeart Failure Manifestos doctrine.
+# GIGAHRUSH 2 — THE IRON GATE & ANTI-SLOP PRE-COMMIT GUARD
+# Unified Master Inquisitor (tools/run_all_guards.py)
 # =============================================================================
 
 set -u
@@ -11,55 +11,13 @@ if [ -n "$ROOT" ]; then
     cd "$ROOT" || exit 1
 fi
 
-echo "=========================================="
-echo "    THE IRON GATE (GigaHrush 2 Guard)     "
-echo "=========================================="
-
-FAILED=""
-
-# [1/5] Diff Guard (запрет удаления тестов, ослабления ассертов, TODO, костылей)
-echo "[1/5] python tools/check_diff_guard.py ..."
-python tools/check_diff_guard.py
+python tools/run_all_guards.py --mode=pre-commit --staged
 if [ $? -ne 0 ]; then
-    FAILED="$FAILED diff_guard"
-fi
-
-# [2/5] Code Invariants (слои архитектуры, запрет sleep, целостность CSV)
-echo "[2/5] python tools/check_code_invariants.py ..."
-python tools/check_code_invariants.py "$ROOT"
-if [ $? -ne 0 ]; then
-    FAILED="$FAILED code_invariants"
-fi
-
-# [3/5] Agent Barrier (запрет заглушек, пустых catch, фейковых тестов)
-echo "[3/5] python tools/check_agent_barrier.py ..."
-python tools/check_agent_barrier.py "$ROOT"
-if [ $? -ne 0 ]; then
-    FAILED="$FAILED agent_barrier"
-fi
-
-# [4/5] Monte Carlo Dice Reality Audit (Кубик Тимаэрта — 100 точек)
-echo "[4/5] python tools/dice_reality_audit.py --samples=100 ..."
-python tools/dice_reality_audit.py --samples=100
-if [ $? -ne 0 ]; then
-    FAILED="$FAILED dice_audit"
-fi
-
-# [5/5] Monotonic Quality Ratchet (контроль пола тестов и потолка долга)
-echo "[5/5] python tools/quality_ratchet.py ..."
-python tools/quality_ratchet.py
-if [ $? -ne 0 ]; then
-    FAILED="$FAILED quality_ratchet"
-fi
-
-echo "=========================================="
-if [ -n "$FAILED" ]; then
+    echo "================================================================================"
     echo "BLOCKED: Iron Gate остановил коммит."
-    echo "  Упали гейты: $FAILED"
-    echo "Чините боевой код по Failure Manifesto выше. Коммит отклонен."
-    echo "=========================================="
+    echo "Устраните дефекты по Failure Manifesto выше. Коммит отклонен."
+    echo "================================================================================"
     exit 1
 fi
 
-echo "All 5 Iron Gate defense checks passed (100% OK)."
 exit 0

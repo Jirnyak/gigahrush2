@@ -15,6 +15,8 @@
 
 #include <chrono>          // замер цены свидетеля (§66) — стиль замера акустики
 
+#include "game/ai.h"     // AiBrain / IntentCombat — U1.8 gate
+#include "game/equip.h"  // Equipped — U1.8 strict weapon read
 #include "game/faction_relations.h"
 #include "game/room.h"     // FloorRooms — контекст свидетеля (S19)
 #include "game/witness.h"  // deed_publish/witness_step — потребитель деяний
@@ -867,5 +869,80 @@ static void test_faction2_all() {
         CHECK(bus.cycle_count(EventType::ItemTransferred) == EventBus::kCapacity);
         bus.clear();
         CHECK(bus.dropped() == 2);                    // since-init, on purpose
+    }
+
+    // ---- 8. U1.8: Equipped strictness & AiBrain IntentCombat gate ----------
+    {
+        ItemId strongMelee = kInvalidItem;
+        std::uint16_t strongDmg = 0;
+        for (ItemId it = 1; it <= kItemCount; ++it) {
+            const MeleeDef* md = melee_for_item(it);
+            if (md && md->dmg > unarmed_melee().dmg && md->dmg > strongDmg) {
+                strongDmg = md->dmg;
+                strongMelee = it;
+            }
+        }
+        CHECK(strongMelee != kInvalidItem);
+        CHECK(strongDmg > unarmed_melee().dmg);
+
+        Registry reg;
+        NpcPool pool;
+        pool.init();
+        const FactionRelations base = kBaseFactionMatrix;
+        const vec3 home{40.0f, 40.0f, 4.0f};
+
+        NpcId liqId = 0, wldId = 0;
+        Entity liq = make_body(reg, pool, Faction::Liquidators, home, 1000, liqId);
+        // Wild stands 1 m away, holding an empty AiBrain (IntentWork -> won't swing back).
+        Entity wld = make_body(reg, pool, Faction::Wild,
+                               vec3{home.x + 1.0f, home.y, home.z}, 1000, wldId);
+        reg.emplace<AiBrain>(wld).currentIntent = IntentWork;
+        pool.inventory(liqId).slots[0] = ItemSlot{strongMelee, 1};
+
+        const std::uint32_t key = static_cast<std::uint32_t>(entt::to_integral(liq));
+        const std::uint64_t open = first_licensed_window(key);
+        CHECK(open != 0u);
+
+        // Equipped attached with empty hands -> falls back to unarmed damage, not strongDmg.
+        Equipped& eq = reg.emplace<Equipped>(liq);
+        for (std::uint64_t t = open; t < open + 400u; ++t) {
+            const std::uint32_t h = faction_feud_step(reg, pool, base, kLayer, t);
+            if (h > 0u) break;
+        }
+        CHECK(pool.hp(wldId) == static_cast<std::int16_t>(1000 - unarmed_melee().dmg));
+
+        // Equip the strong melee weapon -> next swing deals strongDmg.
+        pool.hp(wldId) = 1000;
+        CHECK(equip_item(pool.inventory(liqId), eq, 0));
+        for (std::uint64_t t = open + 400u; t < open + 800u; ++t) {
+            const std::uint32_t h = faction_feud_step(reg, pool, base, kLayer, t);
+            if (h > 0u) break;
+        }
+        CHECK(pool.hp(wldId) == static_cast<std::int16_t>(1000 - strongDmg));
+
+        // AiBrain with kIntentNone (AI dormant) keeps legacy feud; IntentWork blocks it;
+        // IntentCombat allows it.
+        AiBrain& br = reg.emplace<AiBrain>(liq);
+        CHECK(br.currentIntent == kIntentNone);
+        pool.hp(wldId) = 1000;
+        std::uint32_t dormantHits = 0;
+        for (std::uint64_t t = open; t < open + 400u; ++t)
+            dormantHits += faction_feud_step(reg, pool, base, kLayer, t);
+        CHECK(dormantHits > 0u);
+
+        br.currentIntent = IntentWork;
+        pool.hp(wldId) = 1000;
+        std::uint32_t workHits = 0;
+        for (std::uint64_t t = open; t < open + 400u; ++t)
+            workHits += faction_feud_step(reg, pool, base, kLayer, t);
+        CHECK(workHits == 0u);
+        CHECK(pool.hp(wldId) == 1000);
+
+        br.currentIntent = IntentCombat;
+        std::uint32_t combatHits = 0;
+        for (std::uint64_t t = open; t < open + 400u; ++t)
+            combatHits += faction_feud_step(reg, pool, base, kLayer, t);
+        CHECK(combatHits > 0u);
+        CHECK(pool.hp(wldId) < 1000);
     }
 }

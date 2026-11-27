@@ -194,26 +194,28 @@ std::uint32_t chronicle_near_kind(const Chronicle& ch, std::int16_t floor,
 
 namespace {
 
-// Подлежащее одной записи. Столбец имён в пуле — DEMAND и пуст (в `src/`
-// `set_name` не зовёт никто), поэтому человека называет его фракция и номер
-// записи. Это НЕ заглушка: фракция — то, по чему мир его и различает (S19
-// гнёт матрицу по строке фракции, а не по имени).
+// Подлежащее одной записи. Когда имя и фамилия заданы (`set_name` в посеве),
+// выводим «Имя Фамилия (Фракция)» (S19 гнёт матрицу по фракции, так что обе
+// привязки видны в летописи); пока столбец имён пуст — «Фракция #id».
 void write_who(const NpcPool& pool, NpcId id, char* buf, std::size_t cap) {
     if (cap == 0) return;
     if (!pool.valid(id)) {
         std::snprintf(buf, cap, "—");
         return;
     }
+    const std::uint16_t fx = pool.faction(id);
+    const char* fxName =
+        fx < kFactionCount ? faction_name(static_cast<Faction>(fx)) : "?";
     const char* nm = pool.name(id).data();
+    const char* sn = pool.surname(id).data();
     if (nm[0] != '\0') {
-        std::snprintf(buf, cap, "%s", nm);
+        if (sn[0] != '\0')
+            std::snprintf(buf, cap, "%s %s (%s)", nm, sn, fxName);
+        else
+            std::snprintf(buf, cap, "%s (%s)", nm, fxName);
         return;
     }
-    const std::uint16_t fx = pool.faction(id);
-    std::snprintf(buf, cap, "%s #%u",
-                  fx < kFactionCount ? faction_name(static_cast<Faction>(fx))
-                                     : "?",
-                  static_cast<unsigned>(id));
+    std::snprintf(buf, cap, "%s #%u", fxName, static_cast<unsigned>(id));
 }
 
 } // namespace
@@ -221,8 +223,8 @@ void write_who(const NpcPool& pool, NpcId id, char* buf, std::size_t cap) {
 std::size_t fact_line(const Fact& f, const NpcPool& pool, std::uint64_t now,
                       char* out, std::size_t cap) {
     if (out == nullptr || cap == 0) return 0;
-    char who[48];
-    char whom[48];
+    char who[80];
+    char whom[80];
     write_who(pool, f.subject, who, sizeof(who));
     write_who(pool, f.object, whom, sizeof(whom));
     // Возраст — в секундах, и это МОСТ для показа человеку, а не второе

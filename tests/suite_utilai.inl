@@ -99,6 +99,8 @@
 // own #include of the system under test to keep that diff two lines.
 
 #include "game/ai.h"
+#include "game/equip.h"   // Equipped — strict armed check in ai_step (U1.8)
+#include "game/faction_relations.h" // FactionRelations, faction_feud_step (U1.8)
 #include "game/guide.h"   // Steer/SteerRank/guide_step — ЗАЯВКА и ЕДИНСТВЕННЫЙ писатель
 #include "game/needs.h"   // needs_roll — NOT reachable from game_test.cpp's prelude
 #include "game/wander.h"  // wander_init / wander_step / kWanderPeriod
@@ -2228,5 +2230,147 @@ static void test_utilai_all() {
         CHECK(t8.considered == 0u);  // тело человека в знаменатель не входит
         CHECK(claim_rank(reg, e, 9) == SteerRank::None); // и заявки на него нет
         reg.remove<CameraTag>(e);
+    }
+
+    // ======================================================================
+    // 16. U1.8: p.armed + FactionRelations -> IntentCombat <-> faction_feud_step.
+    // ======================================================================
+    {
+        ItemId anyGun = kInvalidItem;
+        ItemId anyMelee = kInvalidItem;
+        for (ItemId it = 1; it <= kItemCount; ++it) {
+            if (anyGun == kInvalidItem && ranged_for_item(it) != nullptr &&
+                !ranged_is_thrown(it))
+                anyGun = it;
+            if (anyMelee == kInvalidItem && melee_for_item(it) != nullptr)
+                anyMelee = it;
+        }
+        CHECK(anyGun != kInvalidItem);
+        CHECK(anyMelee != kInvalidItem);
+
+        MacroGrid grid;
+        Field<float> danger(0.0f);
+        const FactionRelations base = kBaseFactionMatrix;
+
+        // 16a: Armed Liquidator sees a hostile Wild within kFeudRadius -> IntentCombat.
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId liqId = 0, wldId = 0;
+            Entity liq = make_body(reg, pool, 30, 30, 1, Faction::Liquidators, liqId);
+            Entity wld = make_body(reg, pool, 31, 30, 1, Faction::Wild, wldId); // 2 m away
+            pool.inventory(liqId).slots[0] = ItemSlot{anyGun, 1};
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
+            (void)wld;
+        }
+
+        // 16b: Unarmed Citizen with hostile Wild nearby stays unarmed and flees (not IntentCombat).
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId citId = 0, wldId = 0;
+            Entity cit = make_body(reg, pool, 30, 30, 1, Faction::Citizens, citId);
+            Entity wld = make_body(reg, pool, 31, 30, 1, Faction::Wild, wldId);
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
+            CHECK(reg.get<AiBrain>(cit).currentIntent != IntentCombat);
+            (void)wld;
+        }
+
+        // 16c: Strict Equipped decision: gun in bag but empty Equipped -> armed == false -> not IntentCombat.
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId liqId = 0, wldId = 0;
+            Entity liq = make_body(reg, pool, 30, 30, 1, Faction::Liquidators, liqId);
+            Entity wld = make_body(reg, pool, 31, 30, 1, Faction::Wild, wldId);
+            pool.inventory(liqId).slots[0] = ItemSlot{anyGun, 1};
+            reg.emplace<Equipped>(liq); // empty handL/handR -> strict read says unarmed
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent != IntentCombat);
+
+            // Equipping the melee weapon in handL flips p.armed -> IntentCombat.
+            Equipped& eq = reg.get<Equipped>(liq);
+            pool.inventory(liqId).slots[1] = ItemSlot{anyMelee, 1};
+            CHECK(equip_item(pool.inventory(liqId), eq, 1));
+            ai_step(reg, pool, &danger, grid, kLayer, 1.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 2, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
+            (void)wld;
+        }
+
+        // 16d: End-to-end IntentCombat <-> faction_feud_step: non-combat AiBrain suppresses feud;
+        // IntentCombat allows feud to land hits.
+        {
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId liqId = 0, wldId = 0;
+            Entity liq = make_body(reg, pool, 30, 30, 1, Faction::Liquidators, liqId);
+            Entity wld = make_body(reg, pool, 30, 30, 1, Faction::Wild, wldId);
+            reg.get<Transform>(wld).pos.x += 1.0f; // inside unarmed/melee reach
+            pool.inventory(liqId).slots[0] = ItemSlot{anyMelee, 1};
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            // Find an active fight-licence window for `liq`.
+            const std::uint32_t key = static_cast<std::uint32_t>(entt::to_integral(liq));
+            std::uint64_t open = 0;
+            bool prev = npc_seeks_fight(key, 0);
+            for (std::uint64_t t = 1; t < kFeudEpochTicks * 4096u; ++t) {
+                const bool cur = npc_seeks_fight(key, t);
+                if (cur && !prev) { open = t; break; }
+                prev = cur;
+            }
+            CHECK(open != 0u);
+
+            // With AiBrain committed to IntentWork, liq refuses to brawl (and wld is also
+            // suppressed when set to IntentWork).
+            reg.get<AiBrain>(liq).currentIntent = IntentWork;
+            reg.get<AiBrain>(wld).currentIntent = IntentWork;
+            std::uint32_t suppressedHits = 0;
+            for (std::uint64_t t = open; t < open + 200u; ++t)
+                suppressedHits += faction_feud_step(reg, pool, base, kLayer, t);
+            CHECK(suppressedHits == 0u);
+            CHECK(pool.hp(wldId) == 100);
+
+            // Now run ai_step with FactionRelations: liq picks IntentCombat and lands hits.
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, open, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
+            std::uint32_t combatHits = 0;
+            for (std::uint64_t t = open; t < open + 400u; ++t)
+                combatHits += faction_feud_step(reg, pool, base, kLayer, t);
+            CHECK(combatHits > 0u);
+            CHECK(pool.hp(wldId) < 100);
+        }
     }
 }

@@ -89,6 +89,40 @@ PocketCatalog build_pocket_catalog(int floor) {
     return cat;
 }
 
+// Советско-гигахрущёвский словарь имён и фамилий (U2.5). Каждая строка строго
+// <= 22 байт UTF-8 (<= 11 кириллических букв), чтобы гарантированно помещаться
+// в фиксированный слот kNameLen == 24 без обрыва многобайтного символа.
+constexpr const char* kFirstNamesMale[] = {
+    "Иван",    "Пётр",    "Сергей",  "Алексей",
+    "Дмитрий", "Николай", "Андрей",  "Виктор",
+    "Михаил",  "Борис",   "Геннадий","Леонид",
+    "Фёдор",   "Юрий",    "Вадим",   "Артём",
+};
+constexpr const char* kFirstNamesFemale[] = {
+    "Анна",    "Мария",   "Елена",   "Ольга",
+    "Наталья", "Татьяна", "Ирина",   "Светлана",
+    "Галина",  "Любовь",  "Зинаида", "Нина",
+    "Вера",    "Людмила", "Тамара",  "Клара",
+};
+constexpr const char* kSurnamesMale[] = {
+    "Петров",  "Иванов",  "Сидоров", "Смирнов",
+    "Кузнецов","Волков",  "Морозов", "Козлов",
+    "Соколов", "Зайцев",  "Павлов",  "Семёнов",
+    "Голубев", "Беляев",  "Громов",  "Круглов",
+};
+constexpr const char* kSurnamesFemale[] = {
+    "Петрова", "Иванова", "Сидорова","Смирнова",
+    "Кузнецова","Волкова","Морозова","Козлова",
+    "Соколова","Зайцева", "Павлова", "Семёнова",
+    "Голубева","Беляева", "Громова", "Круглова",
+};
+constexpr std::uint32_t kFirstNameCount = 16u;
+constexpr std::uint32_t kSurnameCount = 16u;
+static_assert(sizeof(kFirstNamesMale) / sizeof(kFirstNamesMale[0]) == kFirstNameCount);
+static_assert(sizeof(kFirstNamesFemale) / sizeof(kFirstNamesFemale[0]) == kFirstNameCount);
+static_assert(sizeof(kSurnamesMale) / sizeof(kSurnamesMale[0]) == kSurnameCount);
+static_assert(sizeof(kSurnamesFemale) / sizeof(kSurnamesFemale[0]) == kSurnameCount);
+
 void seed_pocket(NpcPool& pool, NpcId id, const PocketCatalog& cat, int floor,
                  std::uint32_t r) {
     Inventory& inv = pool.inventory(id);
@@ -180,7 +214,18 @@ NpcId seed_floor_from_spec(NpcPool& pool, int floor, const FloorSpec& spec,
         std::uint8_t age =
             static_cast<std::uint8_t>(ageLo + static_cast<int>(r % static_cast<std::uint32_t>(ageSpan)));
         pool.age(id) = age;
-        pool.sex(id) = (r & 0x100u) ? SexFemale : SexMale;
+        const std::uint8_t sex = (r & 0x100u) ? SexFemale : SexMale;
+        pool.sex(id) = sex;
+        {
+            const std::uint32_t nr = hash_u32(r ^ 0x4e414d45u);
+            const char* firstName =
+                (sex == SexFemale ? kFirstNamesFemale : kFirstNamesMale)
+                    [nr % kFirstNameCount];
+            const char* lastName =
+                (sex == SexFemale ? kSurnamesFemale : kSurnamesMale)
+                    [(nr >> 8) % kSurnameCount];
+            pool.set_name(id, firstName, lastName);
+        }
         pool.height_mm(id) = height_for_age(age, hash_u32(r));
 
         // Здесь сеялся безымянный блок перков — восемь байт 3..15 из хеша на

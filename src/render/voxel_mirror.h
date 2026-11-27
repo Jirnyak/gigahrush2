@@ -153,6 +153,35 @@ public:
     static constexpr std::uint8_t kClassBaseMask = 0x03u;
     static constexpr std::uint8_t kClassLightPass = 1u << 2;
     static constexpr std::size_t kClassBytes = kMacroCells;
+
+    // ХОД D (matwej.md §9.2, §9.4): 256 КиБ битовая занятость с переплётом по
+    // брикам 8³ (16×16×16 = 4096 бриков; каждый брик = 512 клеток = 16 u32 =
+    // 64 Б кеш-линия) + 512 Б верхний уровень summary 16³ (128 u32) в одном SSBO.
+    static constexpr std::size_t kBrickDim = 8u;
+    static constexpr std::size_t kBrickCells =
+        kBrickDim * kBrickDim * kBrickDim;
+    static constexpr std::size_t kBrickWords = kBrickCells / 32u;
+    static constexpr std::size_t kBrickGridDim = kMacroDim / kBrickDim;
+    static constexpr std::size_t kBrickCount =
+        kBrickGridDim * kBrickGridDim * kBrickGridDim;
+    static constexpr std::size_t kOccBitsBytes = kMacroCells / 8u;
+    static constexpr std::size_t kBrickSummaryWords = kBrickCount / 32u;
+    static constexpr std::size_t kBrickSummaryBytes =
+        kBrickSummaryWords * sizeof(std::uint32_t);
+    static constexpr std::size_t kOccTotalBytes =
+        kOccBitsBytes + kBrickSummaryBytes;
+    static constexpr std::size_t kOccSummaryWordOffset =
+        kOccBitsBytes / sizeof(std::uint32_t);
+    static_assert(kMacroDim % kBrickDim == 0,
+                  "kMacroDim must be divisible by 8^3 brick dimension");
+    static_assert(kBrickCount % 32u == 0,
+                  "brick count must pack cleanly into 32-bit summary words");
+
+    // Кап батча одного флеша для Хода I (4 Б pageIdx + kModeFill) и Хода D
+    // (kModeOccPatch): гарантирует, что uPageIdx на GPU никогда не укажет на
+    // незаполненную страницу и что буферы патчей не переполнятся.
+    static constexpr std::uint32_t kMaxFillPerFlush = 131072u;
+    static constexpr std::uint32_t kMaxOccPatchPerFlush = 131072u;
     // kFluidBytes/fluid_ УМЕРЛИ (чистка 2026-08-24): fluid-поле вычищено,
     // воду двигает и рисует мир-автомат её собственными атомами.
     // The "stain" SubField ([world/stain.h]): same paged mirror as
@@ -224,6 +253,13 @@ public:
     // against a bitset, so feeding the same cell twice a frame costs nothing.
     void mark_dirty(const std::uint32_t* cells, std::size_t n);
 
+    // Ход I (matwej.md §9.4): лёгкая пометка для свежематериализованных
+    // страниц фронтира (4 Б pageIdx/клетку вместо 1102 Б). Клетка, уже
+    // стоящая в полном dirty_ (или помеченная mark_dirty позже), идёт полным
+    // путём; для остальных flush грузит только pageIdx и публикует ci в
+    // last_fill_cells() для kModeFill в GpuMediumPass.
+    void mark_page_idx_dirty(const std::uint32_t* cells, std::size_t n);
+
     // Record this frame's dirty-cell copies into `cmd` — call OUTSIDE the render
     // pass, before begin_pass. Reads the fresh bytes from `world`; consumed
     // cells leave the queue, overflow stays queued.
@@ -254,8 +290,11 @@ public:
     std::uint32_t upload_gen(std::uint32_t ci) const { return uploadGen_[ci]; }
     std::uint32_t last_flush_bytes() const { return lastFlushBytes_; }
     std::uint32_t dirty_backlog() const { return static_cast<std::uint32_t>(dirty_.size()); }
+    std::uint32_t idx_dirty_backlog() const { return static_cast<std::uint32_t>(idxDirty_.size()); }
     std::uint32_t pages_in_pool() const { return poolPages_; }
     bool page_overflowed() const { return pageOverflow_; }
+    const std::vector<std::uint32_t>& last_fill_cells() const { return lastFillCells_; }
+    const std::vector<std::uint32_t>& last_occ_patches() const { return lastOccPatches_; }
 
     // Buffer handles for the raymarch pass's descriptor set.
     VkBuffer masks_buffer() const { return masks_.buffer; }
@@ -263,6 +302,7 @@ public:
     VkBuffer page_index_buffer() const { return pageIdx_.buffer; }
     VkBuffer page_pool_buffer() const { return pagePool_.buffer; }
     VkBuffer class_buffer() const { return classes_.buffer; }
+    VkBuffer occ_buffer() const { return occ_.buffer; }
     VkBuffer stain_index_buffer() const { return stainIdx_.buffer; }
     VkBuffer stain_pool_buffer() const { return stainPool_.buffer; }
 
@@ -290,6 +330,7 @@ private:
     VulkanBuffer pageIdx_;
     VulkanBuffer pagePool_;
     VulkanBuffer classes_;
+    VulkanBuffer occ_;
     VulkanBuffer stainIdx_;
     VulkanBuffer stainPool_;
     VulkanBuffer staging_[kMaxFramesInFlight];
@@ -321,6 +362,11 @@ private:
     // Dirty queue: dedup bitset (kMacroCells bits = 256 KiB) + the cell list.
     std::vector<std::uint64_t> dirtyBits_;
     std::vector<std::uint32_t> dirty_;
+    // Lightweight pageIdx-only queue (Move I) + per-flush outputs for GpuMediumPass.
+    std::vector<std::uint64_t> idxDirtyBits_;
+    std::vector<std::uint32_t> idxDirty_;
+    std::vector<std::uint32_t> lastFillCells_;
+    std::vector<std::uint32_t> lastOccPatches_;
 
     // Reused per-flush region scratch (no per-frame allocation after warmup).
     std::vector<VkBufferCopy> maskCopies_;
@@ -338,6 +384,7 @@ private:
     // Reused expectation scratch for upload_all/verify's pageIdx image.
     std::vector<std::uint32_t> idxScratch_;
     std::vector<std::uint8_t> classScratch_;
+    std::vector<std::uint32_t> occScratch_;
     std::vector<std::uint8_t> stainRepack_;
 
     std::uint32_t lastFlushCells_ = 0;

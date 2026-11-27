@@ -1257,6 +1257,13 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
             if (!root.suspendVote) continue; // уже погашен — не тратить пробу
             if (!is_ready(e, rb)) root.suspendVote = false;
         }
+        // ======== РЕШАТЕЛЬ ЧЛЕНСТВА В ПУЗЫРЕ (F1 + F2, matwej.md §17.2/§23.7) ==
+        //
+        // F1 (`ragdolls:chains`): единица членства — цепь суставов.
+        // F2 (`debris:settled`):  одиночные тела (`chain == 0u`), но ТОЛЬКО
+        // осевшие (`quietTicks >= kSuspendQuietTicks && !CarriedBy`): летящий
+        // дебрис (класс 3) не замораживается, осевший (класс 1) вынимается из
+        // солвера без потерь и коммутирует бит-в-бит.
         for (Entity e : chainNodes) { // C — трансляция голоса в бит
             RigidBody& rb = reg.get<RigidBody>(e);
             const bool want = reg.get<RigidBody>(root_of(rb)).suspendVote;
@@ -1276,6 +1283,79 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
                 ++stats.unsuspBubble;
             }
         }
+
+        // ---- F2: ОСЕВШИЙ ДЕБРИС И ОДИНОЧНЫЕ ПРОПЫ (chain == 0u) -----------
+        static PresenceId debrisId = kInvalidPresenceId;
+        static std::uint32_t debrisGen = 0xFFFFFFFFu;
+        if (debrisGen != presence_generation()) {
+            debrisGen = presence_generation();
+            debrisId = presence_register({
+                "debris:settled",
+                PresenceLevel::kFull,   // R = 64 м, старт дымки (§23.7)
+                PresenceClass::kFreeze, // класс 1: осевший дебрис не двигается
+                // Бюджет 0.5 мс; замеренная цена штуки из rigid.cpp:195-196
+                // (4096 одиночных тел: 4.5 мс бодрых / 4096 = 1.10 мкс в бинах
+                // + ~1.4 мкс шаг/сон одиночного тела = 2.5 мкс/штука → N = 200).
+                0.5f,
+                2.5f,
+                "rigid.cpp:195-196 & :1140-1141 — 4096 одиночных тел: "
+                "4.5 мс бодрых (1.10 мкс/тело бины) + ~1.4 мкс контакт/сон "
+                "= 2.5 мкс/штука, N=200",
+            });
+        }
+        const PresenceId kDebrisPresence = debrisId;
+
+        static thread_local CellBins debrisBins;
+        debrisBins.clear();
+        for (auto e : view) {
+            const RigidBody& rb = view.get<RigidBody>(e);
+            if (rb.chain != 0u) continue;
+            if (rb.quietTicks < static_cast<std::uint8_t>(kSuspendQuietTicks))
+                continue;
+            if (reg.all_of<CarriedBy>(e)) continue;
+            const Transform& tr = view.get<Transform>(e);
+            debrisBins.add(cell_bin_key(tr.layer, cell_coord(tr.pos.x),
+                                        cell_coord(tr.pos.y),
+                                        cell_coord(tr.pos.z)),
+                           e);
+        }
+        debrisBins.build();
+
+        static thread_local std::vector<CellBins::Near> debrisNearBuf;
+        static thread_local std::vector<Entity> bubbleDebris;
+        const std::uint32_t debrisBudgetN = presence_budget_n(kDebrisPresence);
+        const std::uint32_t debrisOutCap =
+            presence_forced_infinite()
+                ? static_cast<std::uint32_t>(debrisBins.entries.size())
+                : debrisBudgetN;
+        debrisNearBuf.resize(debrisOutCap);
+        const std::uint32_t gotDebris =
+            debrisOutCap == 0
+                ? 0u
+                : presence_query(kDebrisPresence, debrisBins, reg,
+                                 debrisNearBuf.data(), debrisOutCap);
+        bubbleDebris.clear();
+        for (std::uint32_t i = 0; i < gotDebris; ++i)
+            bubbleDebris.push_back(debrisNearBuf[i].e);
+        std::sort(bubbleDebris.begin(), bubbleDebris.end());
+
+        for (auto e : view) {
+            RigidBody& rb = view.get<RigidBody>(e);
+            if (rb.chain != 0u) continue;
+            const bool ready =
+                rb.quietTicks >= static_cast<std::uint8_t>(kSuspendQuietTicks) &&
+                !reg.all_of<CarriedBy>(e);
+            const bool inBubble =
+                ready && std::binary_search(bubbleDebris.begin(),
+                                            bubbleDebris.end(), e);
+            const bool want = ready && !inBubble;
+            if (rb.suspended == want) continue;
+            rb.suspended = want;
+            if (!want) {
+                rb.quietTicks = 0;
+                ++stats.unsuspBubble;
+            }
+        }
         } // if (presence_center_count() != 0)
     }
     // ПЕРЕСЧЁТ БОДРЫХ И РАЗЛОЖЕНИЕ ОТКАЗА — ОДНИМ ПРОХОДОМ, ПОСЛЕ решателя.
@@ -1291,22 +1371,14 @@ void rigid_body_step(Registry& reg, LevelStack& stack, float dt) {
     // пер-тиковый слот профиля: честное число не на тот вопрос.
     awakeCount = 0;
     for (auto e : view) {
-        auto& rb = view.get<RigidBody>(e);
-        if (rb.chain == 0u) {
-            // Вне цепей — вне захода F1 (одиночки едут с F2, со своим замером).
-            // Если бит на теле как-то остался — цепь разрубили, пока оно было
-            // застывшим, — снимаем: такое тело не оживит уже никакой сустав.
-            if (rb.suspended) {
-                rb.suspended = false;
-                rb.quietTicks = 0;
-                ++stats.unsuspBubble;
-            }
-            ++stats.notSuspendedLoose;
-        } else if (!rb.suspended) {
+        const auto& rb = view.get<RigidBody>(e);
+        if (!rb.suspended) {
             if (rb.quietTicks < static_cast<std::uint8_t>(kSuspendQuietTicks))
                 ++stats.notSuspendedNoisy;
             else if (reg.all_of<CarriedBy>(e))
                 ++stats.notSuspendedCarried;
+            else if (rb.chain == 0u && presence_center_count() == 0)
+                ++stats.notSuspendedLoose;
         }
         if (rb.suspended) ++stats.suspended;
         else if (!rb.asleep) ++awakeCount;

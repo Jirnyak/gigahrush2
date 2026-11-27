@@ -69,6 +69,14 @@ constexpr std::uint32_t kModePack = 4;
 constexpr std::uint32_t kModePackHeader = 5;
 constexpr std::uint32_t kModeGate = 6;     // словный гейт битсета
 constexpr std::uint32_t kModeFinalize = 7; // счёт гейта -> 2D indirect
+constexpr std::uint32_t kModeFill = 8;     // Ход I: 4 Б фронтир заполняет uPagePool
+constexpr std::uint32_t kModeOccPatch = 9; // Ход D: атомарный патч uOcc от CPU dirty
+constexpr std::uint32_t kModeOccSummary = 10; // Ход D: точная OR-сводка 16³ бриков
+
+static_assert(GpuMediumPass::kFillCap == VoxelMirror::kMaxFillPerFlush,
+              "kFillCap must match VoxelMirror::kMaxFillPerFlush");
+static_assert(GpuMediumPass::kOccPatchCap == VoxelMirror::kMaxOccPatchPerFlush,
+              "kOccPatchCap must match VoxelMirror::kMaxOccPatchPerFlush");
 
 // РАДИУС ФРОНТИРА и предикат «полная статика» живут в ядре
 // ([world/floor_awaken.h]): фронтир рождения этажа раскрывает страницы в
@@ -101,7 +109,7 @@ void GpuMediumPass::open_frontier(World& world, VoxelMirror& mirror,
         frontierProbes_ += static_cast<std::uint64_t>(2 * kFrontierRadius + 1) *
                            (2 * kFrontierRadius + 1) * (2 * kFrontierRadius + 1);
     }
-    if (!dirty.empty()) mirror.mark_dirty(dirty.data(), dirty.size());
+    if (!dirty.empty()) mirror.mark_page_idx_dirty(dirty.data(), dirty.size());
     frontierPages_ += dirty.size();
     frontierMs_ += std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - tFrontier)
@@ -189,6 +197,7 @@ void GpuMediumPass::drain_page_requests(World& world, VoxelMirror& mirror) {
 bool GpuMediumPass::init(VulkanDevice* dev, const char* shaderDir,
                          const VoxelMirror& mirror) {
     dev_ = dev;
+    mirror_ = &mirror;
     if (!dev_) return false;
     mirrorPool_ = mirror.page_pool_buffer();
     mirrorMasks_ = mirror.masks_buffer();
@@ -219,6 +228,8 @@ void GpuMediumPass::destroy() noexcept {
     cellAct_.destroy(*dev_);
     shadowBits_.destroy(*dev_);
     for (auto& b : appendBuf_) b.destroy(*dev_);
+    for (auto& b : fillBuf_) b.destroy(*dev_);
+    for (auto& b : occPatchBuf_) b.destroy(*dev_);
     pageDev_.destroy(*dev_);
     maskDev_.destroy(*dev_);
     listDev_.destroy(*dev_);
@@ -227,6 +238,7 @@ void GpuMediumPass::destroy() noexcept {
     listBack_.destroy(*dev_);
     pageReqDev_.destroy(*dev_);
     pageReqBack_.destroy(*dev_);
+    mirror_ = nullptr;
     dev_ = nullptr;
 }
 
@@ -265,11 +277,20 @@ bool GpuMediumPass::create_buffers() noexcept {
             *dev_, kMacroCells * sizeof(std::uint32_t),
             st | VK_BUFFER_USAGE_TRANSFER_DST_BIT, "medium-cell-act"))
         return false;
-    for (int i = 0; i < kMaxFramesInFlight; ++i)
+    for (int i = 0; i < kMaxFramesInFlight; ++i) {
         if (!appendBuf_[i].create_host_visible(
                 *dev_, (1 + kAppendCap) * sizeof(std::uint32_t), st,
                 "medium-append"))
             return false;
+        if (!fillBuf_[i].create_host_visible(
+                *dev_, (1 + kFillCap) * sizeof(std::uint32_t), st,
+                "medium-fill"))
+            return false;
+        if (!occPatchBuf_[i].create_host_visible(
+                *dev_, (1 + kOccPatchCap) * sizeof(std::uint32_t), st,
+                "medium-occ-patch"))
+            return false;
+    }
     // ДВА ЭТАЖА ШВА (см. gpu_medium_pass.h): *Dev_ — цель pack-пасса, живёт в
     // VRAM; *Back_ — приёмник копии, живёт на хосте и КЭШИРУЕМ, потому что его
     // читает процессор. Размеры попарно равны — копия идёт регион в регион.
@@ -330,8 +351,8 @@ bool GpuMediumPass::create_buffers() noexcept {
 
 bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
     VkDevice d = dev_->device;
-    // 14-й биндинг — канал запроса страницы (ход E), см. medium_sim.comp.
-    constexpr std::uint32_t kBindings = 14;
+    // 14: канал запроса страницы (E), 15: kModeFill (I), 16: uOcc (D), 17: occPatch (D).
+    constexpr std::uint32_t kBindings = 17;
 
     VkDescriptorSetLayoutBinding bindings[kBindings]{};
     for (std::uint32_t b = 0; b < kBindings; ++b) {
@@ -383,6 +404,9 @@ bool GpuMediumPass::create_descriptors(const VoxelMirror& mirror) noexcept {
         bufs[11] = {listDev_.buffer, 0, VK_WHOLE_SIZE};
         bufs[12] = {shadowBits_.buffer, 0, VK_WHOLE_SIZE};
         bufs[13] = {pageReqDev_.buffer, 0, VK_WHOLE_SIZE};
+        bufs[14] = {fillBuf_[f].buffer, 0, VK_WHOLE_SIZE};
+        bufs[15] = {mirror.occ_buffer(), 0, VK_WHOLE_SIZE};
+        bufs[16] = {occPatchBuf_[f].buffer, 0, VK_WHOLE_SIZE};
         VkWriteDescriptorSet writes[kBindings]{};
         for (std::uint32_t b = 0; b < kBindings; ++b) {
             writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1031,6 +1055,18 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                            sizeof(push), &push);
         vkCmdDispatch(cmd, groups, 1, 1);
     };
+    auto dispatch_2d = [&](std::uint32_t mode, std::uint32_t groups) {
+        constexpr std::uint32_t kMaxGroupsX = 32768u;
+        const std::uint32_t gx = groups < kMaxGroupsX ? groups : kMaxGroupsX;
+        const std::uint32_t gy = (groups + kMaxGroupsX - 1u) / kMaxGroupsX;
+        push.params[0] = static_cast<std::uint32_t>(substepBase);
+        push.params[1] = mode;
+        push.params[2] = 0;
+        push.params[3] = 0;
+        vkCmdPushConstants(cmd, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(push), &push);
+        vkCmdDispatch(cmd, gx, gy, 1);
+    };
     auto dispatch_indirect = [&](std::uint32_t mode, std::uint64_t sub) {
         push.params[0] = static_cast<std::uint32_t>(sub);
         push.params[1] = mode;
@@ -1040,6 +1076,39 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
                            sizeof(push), &push);
         vkCmdDispatchIndirect(cmd, counters_.buffer, 0);
     };
+
+    const bool newMirrorFlush = mirrorFlushGen != lastPatchFlushGen_;
+    lastPatchFlushGen_ = mirrorFlushGen;
+
+    // ХОД I (4 Б фронтир): заполняем свежевыделенные страницы на GPU ДО
+    // move/settle/raymarch — чтобы uPageIdx никогда не указывал на мусор.
+    if (newMirrorFlush && mirror_ && !mirror_->last_fill_cells().empty() &&
+        fillBuf_[slot].mapped) {
+        const auto& fc = mirror_->last_fill_cells();
+        const auto cnt = static_cast<std::uint32_t>(
+            std::min<std::size_t>(fc.size(), kFillCap));
+        auto* fp = static_cast<std::uint32_t*>(fillBuf_[slot].mapped);
+        fp[0] = cnt;
+        std::memcpy(fp + 1, fc.data(), cnt * sizeof(std::uint32_t));
+        dispatch_2d(kModeFill, cnt);
+        barrier();
+    }
+
+    // ХОД D (патч занятости от CPU dirty): атомарное обновление битов uOcc
+    // без перезаписи соседних GPU-клеток целым uint32-словом.
+    bool occDirty = false;
+    if (newMirrorFlush && mirror_ && !mirror_->last_occ_patches().empty() &&
+        occPatchBuf_[slot].mapped) {
+        const auto& op = mirror_->last_occ_patches();
+        const auto cnt = static_cast<std::uint32_t>(
+            std::min<std::size_t>(op.size(), kOccPatchCap));
+        auto* pp = static_cast<std::uint32_t*>(occPatchBuf_[slot].mapped);
+        pp[0] = cnt;
+        std::memcpy(pp + 1, op.data(), cnt * sizeof(std::uint32_t));
+        dispatch_mode(kModeOccPatch, 0, 0, (cnt + 63u) / 64u);
+        barrier();
+        occDirty = true;
+    }
 
     // ИНЖЕКТ писателей: просто биты в битсет активности (Автомат-2).
     if (!appendPending_.empty() && appendBuf_[slot].mapped) {
@@ -1070,6 +1139,16 @@ void GpuMediumPass::record_substeps(VkCommandBuffer cmd, std::uint32_t n,
         dispatch_indirect(kModeMove, substepBase + s);
         barrier();
         dispatch_indirect(kModeSettle, substepBase + s);
+        barrier();
+        occDirty = true;
+    }
+
+    // ХОД D: пересчёт 512 B summary 16³ бриков по 256 KiB uOcc после всех
+    // патчей/подтиков кадра — без гонок 1->0 между потоками внутри брика.
+    if (occDirty) {
+        dispatch_mode(kModeOccSummary, 0, 0,
+                      static_cast<std::uint32_t>(
+                          VoxelMirror::kBrickSummaryWords));
         barrier();
     }
 

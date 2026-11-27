@@ -1495,6 +1495,9 @@ constexpr DemoFloor kDemoFloors[] = {
     {30, game::FloorKind::Residential},  // anchor ZPlus30
 };
 
+// Стартовый демо-этаж: открытый микрорайон Khrushi 6 (если не переопределён --floor).
+constexpr int kStartFloor = game::kKhrushiFloorNumber;
+
 // The floor catalog — the data-driven "ANY number -> a floor" index
 // ([floor_catalog.h]). The pattern rows (the modulo V-shape defaults) and every
 // module folder's explicit claim (the padic module claims 4) come from
@@ -2776,6 +2779,9 @@ int main(int argc, char** argv) {
             saveDirCli = argv[++i];
         }
     }
+    // Если передан --floor N, он перекрывает дефолтный стартовый этаж (Khrushi 6).
+    const int startFloor = shotFloorWanted ? shotFloor : kStartFloor;
+    shotFloorWanted = false;
 
     char* sdlPref = SDL_GetPrefPath("TenevikGames", "gigahrush2");
     const giga::app::AppPaths paths =
@@ -3066,6 +3072,62 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // U2.1: живой CRT-кадр загрузки в swapchain без 3D-сцены, чтобы вместо
+    // чёрного зависшего окна игрок видел прогресс инициализации / поездки.
+    auto draw_loading_frame = [&](const char* statusText, float progress) {
+        if (shotPath) return;
+        SDL_PumpEvents();
+        if (!renderer.begin_frame(window, 0.0f, 0.0f, 0.0f)) return;
+        VkCommandBuffer lcmd = renderer.current_cmd();
+        for (std::uint32_t p = 0; p < gpu::kGpuPassCount; ++p) {
+            const auto gp = static_cast<gpu::GpuPass>(p);
+            if (gp == gpu::GpuPass::Hud) continue;
+            renderer.timer.pass_begin(lcmd, gp);
+            renderer.timer.pass_end(lcmd, gp);
+        }
+        renderer.begin_post_pass();
+        hud.begin_frame();
+        {
+            const ImGuiIO& io = ImGui::GetIO();
+            ImDrawList* bdl = ImGui::GetBackgroundDrawList();
+            bdl->AddRectFilled(ImVec2(0, 0), io.DisplaySize,
+                               IM_COL32(2, 8, 3, 255));
+            for (float y = 0; y < io.DisplaySize.y; y += 4.0f)
+                bdl->AddRectFilled(ImVec2(0, y),
+                                   ImVec2(io.DisplaySize.x, y + 1),
+                                   IM_COL32(0, 0, 0, 60));
+            ImGui::SetNextWindowPos(
+                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::Begin("##loading", nullptr,
+                         ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoTitleBar |
+                             ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoInputs);
+            ImGui::TextColored(ImVec4(0.349f, 0.949f, 0.400f, 1.0f),
+                               "ГИГАХРУЩ 2 // ИНИЦИАЛИЗАЦИЯ СЕКТОРА");
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.949f, 0.780f, 0.251f, 1.0f), "%s",
+                               statusText ? statusText : "ЗАГРУЗКА...");
+            ImGui::Spacing();
+            const float p =
+                progress < 0.0f ? 0.0f : (progress > 1.0f ? 1.0f : progress);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram,
+                                  ImVec4(0.349f, 0.949f, 0.400f, 1.0f));
+            ImGui::ProgressBar(p, ImVec2(380.0f, 14.0f), "");
+            ImGui::PopStyleColor();
+            ImGui::End();
+        }
+        hud.draw_crt_overlay();
+        renderer.timer.pass_begin(lcmd, gpu::GpuPass::Hud);
+        hud.render(lcmd);
+        renderer.timer.pass_end(lcmd, gpu::GpuPass::Hud);
+        renderer.end_frame(window);
+    };
+    draw_loading_frame("ИНИЦИАЛИЗАЦИЯ СЛУЖЕБНЫХ СЕКТОРОВ...", 0.15f);
+
     // --- World + ECS setup -------------------------------------------------
     // Build the world population-first, then embody the player from it ([npcs.md]).
     LevelStack stack;
@@ -3217,7 +3279,7 @@ int main(int argc, char** argv) {
                 });
         });
 
-    int currentFloor = 0;                         // in-game label of the live floor
+    int currentFloor = startFloor;                // in-game label of the live floor
     const game::FloorSpec* currentSpec = nullptr; // its rule-set (HUD only)
 
         game::Doors doors;              // НОВАЯ дверь: ГДЕ и ЧЕМ; состояний нет
@@ -3350,16 +3412,14 @@ int main(int argc, char** argv) {
 
     Entity player = entt::null;
 
-    {
+    auto register_and_seed_modules = [&]() {
         // Register every floor MODULE (number -> module + build recipe), then
-        // load ONLY floor 0. The rest stay cold until the elevator enters them,
+        // load ONLY startFloor. The rest stay cold until the elevator enters them,
         // and leaving a floor folds its crowd back — re-entry re-embodies the same
         // records, so the population never grows per visit.
         streamer.init(stack, /*keepRadius=*/0);
         // The registered building = the catalog's EXPLICIT CLAIMS: the demo rows
-        // plus every module folder's own number (padic's 4 arrives here without
-        // this file naming it). Pattern floors stay unregistered defaults until
-        // something claims or streams them.
+        // plus every module folder's own number (padic's 4, khrushi's 6).
         for (int f = game::kMinFloor; f <= game::kMaxFloor; ++f) {
             const game::FloorDef* def = floor_catalog().claimed(f);
             if (!def) continue;
@@ -3368,36 +3428,16 @@ int main(int argc, char** argv) {
                 1337u ^ (static_cast<std::uint32_t>(f) * 0x9e3779b9u);
             streamer.add_module(registry, f, def->kind, fseed);
         }
-        // Migration destinations are the REGISTERED floor set, never a [lo,hi] band.
-        // This stack is legitimately sparse — {0,1,2,-8,-14,-26,-36,-50,14,30} — so a
-        // uniform draw over [-50,30] would send 71 of every 81 travellers to a floor
-        // that does not exist. Must run after the add_module loop above (the registry
-        // is the authoritative live set) and before the first `step()`. Re-call after
-        // any renumber. [macro_sim.h]
+        // Если --floor N указал на незаявленный этаж, регистрируем его из каталога.
+        if (registry.module_at(startFloor) == game::kInvalidModule) {
+            const game::FloorDef& def = floor_catalog().resolve(startFloor);
+            const std::uint32_t fseed =
+                1337u ^ (static_cast<std::uint32_t>(startFloor) * 0x9e3779b9u);
+            streamer.add_module(registry, startFloor, def.kind, fseed);
+        }
         macroSim.set_floors_from(registry);
-        // POPULATE THE WHOLE BUILDING, not just the floor about to be loaded.
-        //
-        // Measured before this line existed: a fresh run held 420 records — one floor's
-        // worth — because `ensure_loaded` seeds a module's crowd on its FIRST LOAD, so
-        // the population only came into existence where the player had already been.
-        // That made every macro counter structurally zero rather than merely quiet:
-        // migration and the social sweep both skip `pool.embodied` ([macro_sim.h] works
-        // on COLD records only), and with a single loaded floor every existing record was
-        // embodied, so there were no eligible candidates at all.
-        //
-        // Seeding here gives the other nine floors a cold population that ages, dies,
-        // gives birth and migrates before anyone has ever visited them — which is the
-        // difference between a world that lives when unobserved and one that only exists
-        // where the camera has been. Costs ~4,200 records against a 2^20 pool and touches
-        // no layer, no geometry and no ECS entity.
-        // A visited floor IS its snapshot: hand the streamer the way to get one
-        // back, and it restores immediately after generating — before the pipes
-        // are routed and the lamps are hung, so nothing is ever anchored to
-        // geometry that is about to change under it. [problems.md] §42
         streamer.set_floor_restore([&streamer, &registry](World& w,
                                                           int floorNumber) {
-            // Ключ строится здесь, а не module_key_for: хук бежит и в
-            // prebuild-воркере, капчер минимален и только-чтение.
             const game::FloorKind k = kind_for_floor(floorNumber);
             const game::FloorModuleKey key{
                 static_cast<std::uint8_t>(k),
@@ -3409,17 +3449,19 @@ int main(int argc, char** argv) {
         const std::uint32_t seeded = streamer.seed_all_modules(pool);
         std::fprintf(stderr, "[pop] seeded %u cold records across %u registered floors\n",
                      seeded, macroSim.floor_count());
+    };
 
+    auto load_floor_initial = [&](int floorNo, bool applyCliPose) {
         game::NpcId playerId = game::kInvalidNpc;
         game::LoadResult start =
-            streamer.ensure_loaded(stack, registry, reg, pool, 0, playerId);
+            streamer.ensure_loaded(stack, registry, reg, pool, floorNo, playerId);
         player = start.player;
-        currentFloor = 0;
-        currentSpec = spec_for_floor(0);
+        currentFloor = floorNo;
+        currentSpec = spec_for_floor(floorNo);
         if (player != entt::null) {
             aim_player(reg, player);
-            if (hasCustomPos) reg.get<Transform>(player).pos = customPos;
-            if (hasCustomAng) {
+            if (applyCliPose && hasCustomPos) reg.get<Transform>(player).pos = customPos;
+            if (applyCliPose && hasCustomAng) {
                 auto& cam = reg.get<CameraTag>(player);
                 cam.yaw = customYaw;
                 cam.pitch = customPitch;
@@ -3430,24 +3472,17 @@ int main(int argc, char** argv) {
             game::rooms_declare(floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
-            refresh_floor_mobs(reg, stack.layer(l0), 0, l0, /*tick*/ 0);
+            refresh_floor_mobs(reg, stack.layer(l0), currentFloor, l0, /*tick*/ 0);
             // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
-            arrivedRestored = floor_entity_half(l0, 0, /*tick*/ 0);
-            // Doors BEFORE the bake: door_build leaves every door open, so the
-            // walkability bitsets built at the top of begin_floor_nav carry the
-            // all-open geometry (an upper bound on connectivity) the bake must
-            // assume. No freeze: the worker owns a snapshot, never the grid,
-            // so doors may move mid-bake. [door.h, game/rebake.h]
+            arrivedRestored = floor_entity_half(l0, currentFloor, /*tick*/ 0);
             game::rooms_supply_rebuild(floorRooms, reg, l0);
-            // Программы щитков + привязка ламп (S15.4): перештамповка на
-            // КАЖДОМ прибытии — декларация из данных модуля, не сейв (S18).
             game::stamp_shield_programs(reg, &floorRooms, l0);
             game::assign_lamp_shields(reg, l0);
             game::door_declare(doors, floorRooms, currentFloor,
-                           *spec_for_floor(currentFloor),
-                           streamer.floor_seed_of(registry, currentFloor));
+                               *spec_for_floor(currentFloor),
+                               streamer.floor_seed_of(registry, currentFloor));
             if (!arrivedRestored) dress_lift_portals(l0);
-            begin_floor_nav(stack.layer(l0), 0, nav, &floorRooms);
+            begin_floor_nav(stack.layer(l0), currentFloor, nav, &floorRooms);
             game::ai_init(reg, l0);
             if (propPass.ready()) {
                 merge_ecs_prop_meshes(reg, l0, propPass,
@@ -3458,7 +3493,11 @@ int main(int argc, char** argv) {
                 upload_cloths(verletPass, streamer.antourage_at_layer(registry, l0));
             }
         }
-    }
+    };
+
+    draw_loading_frame("ПОСЕВ НАСЕЛЕНИЯ И ЗАГРУЗКА ЭТАЖА...", 0.45f);
+    register_and_seed_modules();
+    load_floor_initial(startFloor, /*applyCliPose=*/true);
 
     if (player == entt::null) {
         std::fprintf(stderr, "population seeding failed to embody a player\n");
@@ -3474,6 +3513,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    draw_loading_frame("СИНХРОНИЗАЦИЯ ВОКСЕЛЬНОЙ МАТРИЦЫ...", 0.85f);
     // The mirror's first full snapshot: whichever mode built the initial world,
     // its geometry (doors included) is final by here. Arrival sites re-upload;
     // carve and doors stream dirty cells from their existing seams.
@@ -3595,6 +3635,7 @@ int main(int argc, char** argv) {
     game::EncumbranceTick encumbrance{};
     int needsHpLost = 0;       // running total, so the HUD is not one tick
     game::RunLedger& ledger = runState.ledger;
+    game::record_floor(ledger, currentFloor);
     // `BankAccount& bankAcct` снесён вместе с пад-банком (2026-11-08). Кошелёк
     // (`ledger.banked`) и был тем, что владелец объявил ядром, и он здесь.
     // F5 saves, F9 loads. Recorded as intent and acted on in the sim loop, the same
@@ -3620,6 +3661,7 @@ int main(int argc, char** argv) {
     auto menu_start_playing = [&]() {
         shell.screen = AppScreen::Playing;
         shell.menuPage = 0;
+        shell.settingsTab = nullptr;
         input.set_mouselook(true);
         SDL_SetWindowRelativeMouseMode(window, true);
         giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
@@ -3820,9 +3862,9 @@ int main(int argc, char** argv) {
     int pendingTeleport = game::ConsoleContext::kNoRequest;
     int pendingLandHub = -1; // lattice hub for fast-travel land; -1 = keep x/y
     // §24 fast-travel unlock set. Discovery: boarding a hub unlocks THIS floor.
-    // Start floor 0 unlocked so the first hub ride has somewhere to go back to.
+    // Start floor unlocked so the first hub ride has somewhere to go back to.
     game::FastTravelState fastTravel;
-    fastTravel.unlock(0);
+    fastTravel.unlock(startFloor);
 
     // ── Key bindings ────────────────────────────────────────────────────
     // Keys are DATA: a KeybindTable row maps a scancode to a console command
@@ -3853,9 +3895,8 @@ int main(int argc, char** argv) {
         std::fclose(f);
     };
     // The rebind capture (settings, Controls tab): index of the row waiting
-    // for a key, -1 when idle. menuPage 0 = main items, 1 = settings.
+    // for a key, -1 when idle. Page index lives in UiShell::menuPage.
     int rebindCapture = -1;
-    int menuPage = 0;
 
     // ── UI-настройки приложения ([settings_ui.h]) ───────────────────────
     // Один текстовый файл рядом с биндами, тот же паттерн save_binds: ключ
@@ -3948,7 +3989,9 @@ int main(int argc, char** argv) {
         sctx.vrIpd = &vrIpd;
         sctx.fullscreen = &fullscreenState;
         sctx.audio = &audioSys.mixer().config();
-        const SettingsRequest sreq = settings_ui_draw(sctx);
+        const SettingsRequest sreq =
+            settings_ui_draw(sctx, shell.settingsTab);
+        shell.settingsTab = nullptr;
         if (sreq.bindsReset) {
             binds.clear();
             game::keybind_register_defaults(binds);
@@ -4388,48 +4431,15 @@ int main(int argc, char** argv) {
     // слота файлов нет → ensure_loaded генерирует, развилка сущностей идёт
     // generate-веткой и сеет всё свежим. Тот же F9-хребет: unload → build →
     // сущностная половина → двери/нав/зеркала → тело.
-    auto rebuild_current_floor = [&]() {
-        // F9/новая игра: снимок прошлой поездки, севший ПОСЛЕ загрузки,
-        // клоббернул бы только что прочитанный run.sav — дизарм без записи.
-        rideAutosaveArmed = false;
-        flush_floor_write();
-        {
-            std::lock_guard<std::mutex> lk(g_restoreMx);
-            g_pendingRestore.clear(); // бут мог начитать чужой слот
-        }
-        game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
-                                            : game::kInvalidNpc;
-        streamer.unload(stack, registry, reg, pool, currentFloor);
-        const game::LoadResult lr = streamer.ensure_loaded(
-            stack, registry, reg, pool, currentFloor, pid);
-        const LayerId nl = lr.layer;
-        activeLayer = nl;
-        player = pid != game::kInvalidNpc
-                     ? game::embody_as_player(reg, pool, pid, nl)
-                     : lr.player;
-        game::rooms_declare(floorRooms, currentFloor,
-                            *spec_for_floor(currentFloor),
-                            streamer.floor_seed_of(registry, currentFloor));
-        refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
-        arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
-        diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
-        arrive_doors_nav(nl);
-        voxelMirror.upload_all(stack.layer(nl));
-        if (mirrorVerify) voxelMirror.verify(stack.layer(nl));
-        if (propPass.ready()) {
-            merge_ecs_prop_meshes(reg, nl, propPass,
-                                  streamer.antourage_at_layer(registry, nl),
-                                  stack.layer(nl), simTick, &dripEmitters);
-            upload_wires(verletPass, streamer.antourage_at_layer(registry, nl));
-            upload_cloths(verletPass, streamer.antourage_at_layer(registry, nl));
-        }
-        if (reg.valid(player)) {
-            game::place_body_safely(reg, stack.layer(nl), player);
-            aim_player(reg, player);
-        }
-    };
-
     auto do_ride = [&](bool absolute, int target, int landHub = -1) -> bool {
+        char loadMsg[96];
+        if (absolute)
+            std::snprintf(loadMsg, sizeof loadMsg, "ПЕРЕХОД НА ЭТАЖ %d...",
+                          target);
+        else
+            std::snprintf(loadMsg, sizeof loadMsg, "%s...",
+                          target < 0 ? "СПУСК ЛИФТА" : "ПОДЪЁМ ЛИФТА");
+        draw_loading_frame(loadMsg, 0.45f);
         // Pass the player's durable record id so the destination crowd skips it
         // instead of spawning a second player.
         game::NpcId pid = reg.valid(player) ? reg.get<game::NpcRef>(player).id
@@ -4501,13 +4511,147 @@ int main(int argc, char** argv) {
         return true;
     };
 
+    LayerId mediumLayer = kInvalidLayer;
+    CameraMatrices lastCamMat{};
+
+    // Полный сброс мира и рана на стартовый этаж (новая игра из меню или «Новый забег» из RunOver).
+    auto reset_to_new_run = [&](bool wipeSlot, bool enterPlaying) {
+        draw_loading_frame("СБРОС СЕКТОРА И ЗАГРУЗКА НОВОГО ЗАБЕГА...", 0.30f);
+        nav.cancel();
+        if (liftRide != LiftRide::Idle) {
+            while (nav.baking()) {
+                nav.step(simTick);
+                SDL_Delay(2);
+            }
+            (void)nav.take_prebuilt();
+            streamer.prebuild_cancel();
+            liftRide = LiftRide::Idle;
+            liftSwapLayer = kInvalidLayer;
+        }
+        rideAutosaveArmed = false;
+        flush_floor_write();
+        {
+            std::lock_guard<std::mutex> lk(g_restoreMx);
+            g_pendingRestore.clear();
+        }
+        if (wipeSlot) {
+            char dir[1024];
+            slot_dir_path(dir, sizeof dir, g_saveSlot);
+            std::error_code ec;
+            std::filesystem::remove_all(giga::app::fs_path_from_utf8(dir), ec);
+        }
+        streamer.unload(stack, registry, reg, pool, currentFloor);
+        reg.clear();
+        pool.init();
+        pool.set_recycling(true);
+        macroSim.init();
+        macroStats = game::MacroStats{};
+        factionRel = game::kBaseFactionMatrix;
+        relTick = game::RelationTick{};
+        feudHits = 0;
+        bus.init();
+        chron.init();
+        game::noise_clear(noiseField);
+        stack = LevelStack{};
+        registry = game::FloorRegistry{};
+        streamer = game::FloorStreamer{};
+        register_and_seed_modules();
+
+        currentFloor = startFloor;
+        runState = game::SaveState{};
+        game::record_floor(ledger, currentFloor);
+        simTick = 0;
+        simNow = 0.0;
+        simAccum = 0.0f;
+        sbRng = game::SamosborRng{0x5A303B0Du};
+        samosbor = game::samosbor_new_game(sbRng);
+        samosborCycles = 0;
+        samosborDamage = 0;
+        fastTravel = game::FastTravelState{};
+        fastTravel.unlock(startFloor);
+        game::craft_init(crafting);
+        playerStatus = game::StatusSet{};
+        carriedRpg = game::fresh_rpg(1);
+        kills = 0;
+        deaths = 0;
+        containerTake = 0;
+        meleeHits = 0;
+        crowdDead = 0;
+        crafted = 0;
+        scrapped = 0;
+        recipesLearned = 0;
+        healed = 0;
+        needsHpLost = 0;
+        aiMem = game::AiMemory{};
+        rumourLine[0] = '\0';
+        rumourAt = 0;
+        speechLine = nullptr;
+        speechAt = 0;
+        saveLine[0] = '\0';
+        saveLineAt = 0;
+        deedNote[0] = '\0';
+        deedNoteAt = 0;
+        deedBody = entt::null;
+        shell.close_window();
+        showConsole = false;
+        bankCounterOpen = false;
+        diceGame = game::DiceGame{};
+        lootEntity = entt::null;
+        lootIsCorpse = false;
+        lootIsBarter = false;
+        convNpc = game::kInvalidNpc;
+        convEntity = entt::null;
+        barterOwnMarks = 0;
+        barterOtherMarks = 0;
+        attackHeld = false;
+        rmbHeld = false;
+        healWanted = false;
+        reliefWanted = false;
+        useItemWanted = game::kInvalidItem;
+        craftWanted = false;
+        scrapWanted = false;
+        possessWanted = false;
+        throwWanted = false;
+        saveWanted = false;
+        loadWanted = false;
+        antourageFalling.clear();
+        dripEmitters.clear();
+        mediumLayer = kInvalidLayer;
+        if (mediumPass.ready()) mediumPass.clear_live();
+        big_judge_reset();
+
+        load_floor_initial(startFloor, /*applyCliPose=*/false);
+        if (reg.valid(player)) {
+            activeLayer = reg.get<Transform>(player).layer;
+            diffusion_driver_on_floor_built(
+                diffusionDriver, stack.layer(activeLayer), activeLayer);
+            draw_loading_frame("СИНХРОНИЗАЦИЯ ВОКСЕЛЬНОЙ МАТРИЦЫ...", 0.85f);
+            voxelMirror.upload_all(stack.layer(activeLayer));
+            if (mirrorVerify) voxelMirror.verify(stack.layer(activeLayer));
+        }
+        lastCamMat = CameraMatrices{};
+        if (enterPlaying) {
+            menu_start_playing();
+        } else {
+            shell.screen = AppScreen::Menu;
+            shell.menuPage = 0;
+            shell.settingsTab = nullptr;
+            input.set_mouselook(false);
+            SDL_SetWindowRelativeMouseMode(window, false);
+            giga::app::crash_log_set_context(currentFloor, simTick, g_saveSlot,
+                                             "menu");
+        }
+    };
+
     while (running) {
         giga::app::crash_log_set_context(
             currentFloor, simTick, g_saveSlot,
             shotPath ? "shot"
-                     : (shell.screen == AppScreen::Playing ? "playing"
-                                                           : "menu"));
-        activeLayer = reg.get<Transform>(player).layer;
+                     : (shell.screen == AppScreen::Playing
+                            ? "playing"
+                            : (shell.screen == AppScreen::RunOver ? "run_over"
+                                                                  : "menu")));
+        if (reg.valid(player)) activeLayer = reg.get<Transform>(player).layer;
         project_god_onto_body(); // Б4: тело могло смениться с прошлого кадра
         bool propPassNeedsRebuild = false;
         // dressingSetChanged МЁРТВ (2026-08-31, приказ владельца): смерть
@@ -5301,7 +5445,7 @@ int main(int argc, char** argv) {
         if (nav.step(simTick)) {
             const LayerId l = reg.valid(player)
                                   ? reg.get<Transform>(player).layer
-                                  : LayerId{0};
+                                  : activeLayer;
             finish_floor_nav(reg, l, nav);
             // Лифт готовность Fresh-свапа читает УРОВНЕМ (nav.ready() в
             // условии створок) — здесь края больше нет, и гонка «бейк
@@ -5655,10 +5799,9 @@ int main(int argc, char** argv) {
                     shell.screen = shell.screen == AppScreen::Pause
                                        ? AppScreen::Playing
                                        : AppScreen::Pause;
-                    if (shell.playing()) {
-                        menuPage = 0;
-                        rebindCapture = -1;
-                    }
+                    shell.menuPage = 0;
+                    shell.settingsTab = nullptr;
+                    if (shell.playing()) rebindCapture = -1;
                     input.set_mouselook(shell.playing());
                     SDL_SetWindowRelativeMouseMode(window, shell.playing());
                 }
@@ -5792,7 +5935,6 @@ int main(int argc, char** argv) {
         // 2) poll_activity — пробуждение соседей/усыпление по ActOut.
         // Смена слоя = live-набор указывает в старый мир — сброс.
         if (mediumPass.ready() && activeLayer != kInvalidLayer) {
-            static LayerId mediumLayer = static_cast<LayerId>(~0u);
             if (mediumLayer != activeLayer) {
                 mediumLayer = activeLayer;
                 mediumPass.clear_live();
@@ -6482,7 +6624,8 @@ int main(int argc, char** argv) {
                 aiTick = game::ai_step(
                     reg, pool, danger, activeGrid, activeLayer, simNow, kSimDt, aiCfg,
                     &aiMem, nullptr, &activeWorld, &bus, simTick,
-                    game::ai_env(simTick, static_cast<game::SamosborPhase>(samosbor.phase)));
+                    game::ai_env(simTick, static_cast<game::SamosborPhase>(samosbor.phase)),
+                    &factionRel);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Flee, steerProbe);
                 // (AGENT-GOALS ИНКРЕМЕНТ A СНЕСЁН 2026-09-30 вместе с
@@ -9712,14 +9855,25 @@ int main(int argc, char** argv) {
                     // value saved off at the top of the death path (carriedRpg).
                     player = possess_a_survivor(reg, pool, activeLayer);
                     if (player == entt::null) {
-                        // Живых на слое не осталось — приложение сейчас просто
-                        // закроется, без единого слова игроку. Для тестирующего
-                        // это неотличимо от краша, поэтому разница обязана
-                        // остаться хотя бы в файле.
+                        // Живых на слое не осталось: в --shot завершаем прогон с
+                        // логом, для живого игрока открываем CRT-экран «РАН ОКОНЧЕН».
                         soak_log("[soak] EVENT run-over: выживших на слое %u "
-                                 "нет, выход (это НЕ краш)\n",
-                                 static_cast<unsigned>(activeLayer));
-                        running = false;
+                                 "нет, %s (это НЕ краш)\n",
+                                 static_cast<unsigned>(activeLayer),
+                                 shotPath ? "выход" : "экран RunOver");
+                        if (shotPath) {
+                            running = false;
+                        } else {
+                            shell.screen = AppScreen::RunOver;
+                            shell.close_window();
+                            showConsole = false;
+                            attackHeld = false;
+                            rmbHeld = false;
+                            input.set_mouselook(false);
+                            SDL_SetWindowRelativeMouseMode(window, false);
+                            giga::app::crash_log_set_context(
+                                currentFloor, simTick, g_saveSlot, "run_over");
+                        }
                         break;
                     }
                     aim_player(reg, player);
@@ -9824,6 +9978,10 @@ int main(int argc, char** argv) {
             ? stack.layer(activeLayer).gravity().up_vector()
             : vec3{0.0f, 0.0f, 1.0f};
         CameraMatrices camMat = compute_camera(reg, aspect, worldUp);
+        if (camMat.valid)
+            lastCamMat = camMat;
+        else if (lastCamMat.valid)
+            camMat = lastCamMat;
         // Стереопара для 3D-режима. Аспект — у ОДНОГО глаза: при Side-by-Side
         // глазу достаётся половина ширины, и взять сюда аспект окна значило бы
         // растянуть обе картинки вдвое ([sim/camera.h]).
@@ -11014,6 +11172,22 @@ int main(int argc, char** argv) {
                     1.0f;
                 convValid = dx * dx + dy * dy + dz * dz <= reach * reach;
             }
+            auto format_npc_header = [&](game::NpcId id, char* out,
+                                         std::size_t cap) {
+                const char* fac = game::faction_name(static_cast<game::Faction>(
+                    pool.faction(id) % game::kFactionCount));
+                const char* first = pool.name(id).data();
+                const char* last = pool.surname(id).data();
+                const bool hasFirst = first && first[0] != '\0';
+                const bool hasLast = last && last[0] != '\0';
+                if (hasFirst && hasLast)
+                    std::snprintf(out, cap, "%s %s · %s", first, last, fac);
+                else if (hasFirst || hasLast)
+                    std::snprintf(out, cap, "%s · %s",
+                                  hasFirst ? first : last, fac);
+                else
+                    std::snprintf(out, cap, "%s", fac);
+            };
             if (!convValid) {
                 diceGame = game::DiceGame{};   // собеседник пропал — стол пуст
                 bankCounterOpen = false;
@@ -11029,10 +11203,8 @@ int main(int argc, char** argv) {
                     std::int64_t cash = 0;
                     for (const auto& bs : binv.slots)
                         if (bs.item == game::kItemRuble) cash += bs.count;
-                    char header[96];
-                    std::snprintf(header, sizeof header, "%s",
-                                  game::faction_name(static_cast<game::Faction>(
-                                      pool.faction(convNpc))));
+                    char header[128];
+                    format_npc_header(convNpc, header, sizeof header);
                     const TellerUiRequest br =
                         teller_ui_draw(ledger.banked, cash, header);
                     if (br.depositAll) {
@@ -11061,10 +11233,8 @@ int main(int argc, char** argv) {
                 }
             } else if (diceGame.active) {
                 // Стол занят: панель партии ВМЕСТО меню, один читатель клавиш.
-                char header[96];
-                std::snprintf(header, sizeof header, "%s",
-                              game::faction_name(static_cast<game::Faction>(
-                                  pool.faction(convNpc))));
+                char header[128];
+                format_npc_header(convNpc, header, sizeof header);
                 const DiceUiRequest dr = dice_ui_draw(diceGame, header);
                 if (dr.roll) game::dice_roll(diceGame, pool);
                 if (dr.hold) game::dice_hold(diceGame, pool);
@@ -11102,10 +11272,8 @@ int main(int argc, char** argv) {
                 game::ConvOption opts[game::kConvMaxOptions];
                 const std::size_t nOpts =
                     game::conv_options(cctx, opts, game::kConvMaxOptions);
-                char header[96];
-                std::snprintf(header, sizeof header, "%s",
-                              game::faction_name(static_cast<game::Faction>(
-                                  pool.faction(convNpc))));
+                char header[128];
+                format_npc_header(convNpc, header, sizeof header);
                 const ConvUiRequest cr = conversation_ui_draw(
                     convUi, header, convLine[0] ? convLine : nullptr, opts,
                     nOpts);
@@ -11238,7 +11406,14 @@ int main(int argc, char** argv) {
                 ImGui::Separator();
                 if (ImGui::Button("Новая игра", btn)) shell.menuPage = 2;
                 if (ImGui::Button("Загрузить", btn)) shell.menuPage = 1;
-                if (ImGui::Button("Настройки", btn)) shell.menuPage = 3;
+                if (ImGui::Button("Управление", btn)) {
+                    shell.menuPage = 3;
+                    shell.settingsTab = "controls";
+                }
+                if (ImGui::Button("Настройки", btn)) {
+                    shell.menuPage = 3;
+                    shell.settingsTab = nullptr;
+                }
                 ImGui::Spacing();
                 if (ImGui::Button("Выход", btn)) running = false;
             } else if (shell.menuPage == 1) {
@@ -11271,22 +11446,7 @@ int main(int argc, char** argv) {
                                   slot_occupied(s) ? "  (перезапись)" : "");
                     if (ImGui::Button(label, btn)) {
                         g_saveSlot = s;
-                        // A new game clears its slot's directory: stale floor
-                        // files from the previous run in this slot must not
-                        // leak into a fresh one. Player-directed, labelled.
-                        char dir[1024];
-                        slot_dir_path(dir, sizeof dir, s);
-                        std::error_code ec;
-                        std::filesystem::remove_all(
-                            giga::app::fs_path_from_utf8(dir), ec);
-                        // ...и ПЕРЕСТРОИТЬ уже построенный этаж (аудит F,
-                        // жук №2): бут восстановил этаж 0 из слота по
-                        // умолчанию до всякого меню — без пересборки свежий
-                        // ран начинался среди вылутанных ящиков, чужих
-                        // трупов и обесточки покойника, и первый же leave
-                        // вписал бы это в чистый слот.
-                        rebuild_current_floor();
-                        menu_start_playing();
+                        reset_to_new_run(/*wipeSlot=*/true, /*enterPlaying=*/true);
                     }
                 }
                 ImGui::Spacing();
@@ -11300,19 +11460,76 @@ int main(int argc, char** argv) {
                 ImGui::Spacing();
                 if (ImGui::Button("Назад", btn)) {
                     shell.menuPage = 0;
+                    shell.settingsTab = nullptr;
                     rebindCapture = -1;
                 }
             }
             ImGui::End();
+
+            // U2.2: компактная CRT-памятка первых действий под главным меню.
+            if (shell.menuPage == 0) {
+                ImGui::SetNextWindowPos(
+                    ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 20.0f),
+                    ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+                ImGui::Begin("##menu_hints", nullptr,
+                             ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoCollapse |
+                                 ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_NoTitleBar |
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoInputs);
+                ImGui::TextColored(ImVec4(0.349f, 0.949f, 0.400f, 1.0f),
+                                   "ПАМЯТКА ОПЕРАТОРА // ПЕРВЫЕ ДЕЙСТВИЯ");
+                ImGui::Separator();
+                if (ImGui::BeginTable("##hint_rows", 2,
+                                      ImGuiTableFlags_SizingFixedFit)) {
+                    auto hint_row = [](const char* keys, const char* desc) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextColored(
+                            ImVec4(0.949f, 0.780f, 0.251f, 1.0f), "%s", keys);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(desc);
+                    };
+                    char moveBuf[64], lookBuf[48], actBuf[48], invBuf[48],
+                        conBuf[48], saveBuf[48];
+                    std::snprintf(moveBuf, sizeof moveBuf, "[%s/%s/%s/%s] + [%s]",
+                                  bind_key("move_fwd"), bind_key("move_left"),
+                                  bind_key("move_back"), bind_key("move_right"),
+                                  bind_key("jump"));
+                    std::snprintf(lookBuf, sizeof lookBuf, "Мышь / [%s]",
+                                  bind_key("mouselook"));
+                    std::snprintf(actBuf, sizeof actBuf, "[%s]",
+                                  bind_key("interact"));
+                    std::snprintf(invBuf, sizeof invBuf, "[%s] / [%s]",
+                                  bind_key("inventory"), bind_key("relief"));
+                    std::snprintf(conBuf, sizeof conBuf, "[%s]",
+                                  bind_key("console"));
+                    std::snprintf(saveBuf, sizeof saveBuf, "[%s] / [%s] / [%s]",
+                                  bind_key("save"), bind_key("load"),
+                                  bind_key("menu"));
+                    hint_row(moveBuf, "Движение и прыжок");
+                    hint_row(lookBuf, "Обзор / переключение курсора");
+                    hint_row(actBuf,
+                             "Взаимодействие (двери, ящики, NPC, мебель, лифт)");
+                    hint_row(invBuf, "Инвентарь / облегчение");
+                    hint_row("Лифт 2x2",
+                             "Зайдите в кабину и нажмите действие на панели "
+                             "(или ride/ft в консоли)");
+                    hint_row(conBuf, "Служебная консоль (команды help, fly, ft)");
+                    hint_row(saveBuf, "Сохранение / загрузка / пауза");
+                    ImGui::EndTable();
+                }
+                ImGui::End();
+            }
         }
 
         // Pause menu (Esc). Extensible BY DATA: a main-page item is a label plus
         // a console line, so the same row already works from the keyboard and
         // the typed console, and a future option is one table entry — never a
-        // new handler. Page 1 is THE settings window ([settings_ui.h]) — the
-        // same tabs the main menu shows; the old in-pause bind editor became
-        // its Controls tab. Кириллица в ярлыках законна: шрифт несёт её
-        // (имена мобов, худ) — старое «ASCII only» было правдой другого шрифта.
+        // new handler. Page 3 is THE settings window ([settings_ui.h]) — the
+        // same tabs the main menu shows. Кириллица в ярлыках законна: шрифт
+        // несёт её (имена мобов, худ).
         if (shell.screen == AppScreen::Pause) {
             ImGuiIO& io = ImGui::GetIO();
             ImGui::SetNextWindowPos(
@@ -11324,7 +11541,7 @@ int main(int argc, char** argv) {
                              ImGuiWindowFlags_NoTitleBar |
                              ImGuiWindowFlags_NoSavedSettings);
             const ImVec2 btn(220.0f, 0.0f);
-            if (menuPage == 0) {
+            if (shell.menuPage == 0) {
                 ImGui::TextUnformatted("ПАУЗА");
                 ImGui::Separator();
                 struct MenuItem {
@@ -11339,7 +11556,14 @@ int main(int argc, char** argv) {
                 refresh_console_ctx();
                 for (const MenuItem& item : kItems)
                     if (ImGui::Button(item.label, btn)) exec_command(item.command);
-                if (ImGui::Button("Настройки", btn)) menuPage = 1;
+                if (ImGui::Button("Управление", btn)) {
+                    shell.menuPage = 3;
+                    shell.settingsTab = "controls";
+                }
+                if (ImGui::Button("Настройки", btn)) {
+                    shell.menuPage = 3;
+                    shell.settingsTab = nullptr;
+                }
                 ImGui::Spacing();
                 if (ImGui::Button("Выйти", btn)) exec_command("quit");
             } else {
@@ -11348,10 +11572,86 @@ int main(int argc, char** argv) {
                 draw_settings_page();
                 ImGui::Spacing();
                 if (ImGui::Button("Назад", btn)) {
-                    menuPage = 0;
+                    shell.menuPage = 0;
+                    shell.settingsTab = nullptr;
                     rebindCapture = -1;
                 }
             }
+            ImGui::End();
+        }
+
+        // U2.3: экран «РАН ОКОНЧЕН» со сводкой RunLedger и кнопками перезапуска.
+        if (shell.screen == AppScreen::RunOver) {
+            ImGuiIO& io = ImGui::GetIO();
+            ImDrawList* rdl = ImGui::GetBackgroundDrawList();
+            rdl->AddRectFilled(ImVec2(0, 0), io.DisplaySize,
+                               IM_COL32(2, 8, 3, 210));
+            for (float y = 0; y < io.DisplaySize.y; y += 4.0f)
+                rdl->AddRectFilled(ImVec2(0, y),
+                                   ImVec2(io.DisplaySize.x, y + 1),
+                                   IM_COL32(0, 0, 0, 60));
+            ImGui::SetNextWindowPos(
+                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::Begin("##runover", nullptr,
+                         ImGuiWindowFlags_AlwaysAutoResize |
+                             ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoTitleBar |
+                             ImGuiWindowFlags_NoSavedSettings);
+            ImGui::TextColored(ImVec4(0.902f, 0.310f, 0.361f, 1.0f),
+                               "РАН ОКОНЧЕН // СВОДКА ПРОТОКОЛА");
+            ImGui::TextColored(ImVec4(0.949f, 0.780f, 0.251f, 1.0f),
+                               "В СЕКТОРЕ НЕ ОСТАЛОСЬ ЖИВЫХ НОСИТЕЛЕЙ");
+            ImGui::Separator();
+            if (ImGui::BeginTable("##runover_ledger", 2,
+                                  ImGuiTableFlags_BordersInnerH |
+                                      ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("##k", ImGuiTableColumnFlags_WidthFixed,
+                                        200.0f);
+                ImGui::TableSetupColumn("##v", ImGuiTableColumnFlags_WidthFixed,
+                                        180.0f);
+                auto row_str = [](const char* k, const char* v) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(k);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(
+                        ImVec4(0.349f, 0.949f, 0.400f, 1.0f), "%s", v);
+                };
+                char valBuf[64];
+                std::snprintf(valBuf, sizeof valBuf, "%lld руб",
+                              static_cast<long long>(ledger.banked));
+                row_str("Счёт (RunLedger)", valBuf);
+                std::snprintf(valBuf, sizeof valBuf, "этаж %d (E%u)",
+                              ledger.deepestFloor, ledger.deepestBand);
+                row_str("Макс. глубина", valBuf);
+                std::snprintf(valBuf, sizeof valBuf, "%u", kills);
+                row_str("Убито", valBuf);
+                std::snprintf(valBuf, sizeof valBuf, "%u", deaths);
+                row_str("Смертей носителей", valBuf);
+                std::snprintf(valBuf, sizeof valBuf, "%d руб", containerTake);
+                row_str("Взято из ящиков", valBuf);
+                const std::uint64_t totalSec =
+                    (simTick * static_cast<std::uint64_t>(giga::kSimStepMs)) /
+                    1000ull;
+                std::snprintf(valBuf, sizeof valBuf, "%llu:%02llu (%llu тик.)",
+                              static_cast<unsigned long long>(totalSec / 60ull),
+                              static_cast<unsigned long long>(totalSec % 60ull),
+                              static_cast<unsigned long long>(simTick));
+                row_str("Время выживания", valBuf);
+                ImGui::EndTable();
+            }
+            ImGui::Separator();
+            const ImVec2 btn(240.0f, 0.0f);
+            if (ImGui::Button("Новый забег", btn)) {
+                reset_to_new_run(/*wipeSlot=*/true, /*enterPlaying=*/true);
+            }
+            if (ImGui::Button("В главное меню", btn)) {
+                reset_to_new_run(/*wipeSlot=*/false, /*enterPlaying=*/false);
+                introFx.retarget_title(io.DisplaySize.x, io.DisplaySize.y);
+            }
+            if (ImGui::Button("Выход", btn)) running = false;
             ImGui::End();
         }
 

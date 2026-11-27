@@ -1163,12 +1163,14 @@ std::uint32_t ai_init(Registry& reg, LayerId layer);
 // тик, а деяние публикуется раз в ТАКТ на пациента (stateless дебаунс
 // границей kTactTicks — ср. «одно взятие в час» S12.5).
 class EventBus; // game/event_bus.h — заголовку хватает указателя
+struct FactionRelations; // game/faction_relations.h — заголовку хватает указателя
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const void* doorsDead = nullptr, // МОГИЛА ДВЕРЕЙ: слот пустует до новой системы
                const World* world = nullptr, EventBus* bus = nullptr,
-               std::uint64_t tick = 0, AiEnv env = {});
+               std::uint64_t tick = 0, AiEnv env = {},
+               const FactionRelations* rel = nullptr);
 
 } // namespace giga::game
 

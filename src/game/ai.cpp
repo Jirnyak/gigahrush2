@@ -14,7 +14,9 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
+#include "game/faction_relations.h" // FactionRelations, nearest_faction_foe, kFeudRadius
 #include "game/patrol.h"      // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
+#include "game/ranged_table.h" // equipped_ranged — armed check in Perception
 #include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "game/weapon_table.h" // melee_for_item — the weapon scorer's melee half
 #include "sim/diffusion.h"    // diffusion_gradient — the flee steering field
@@ -592,7 +594,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const void* doorsDead, const World* world, EventBus* bus,
-               std::uint64_t tick, AiEnv env) {
+               std::uint64_t tick, AiEnv env, const FactionRelations* rel) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and выключить ИИ на живом этаже теперь безопасно само:
@@ -727,6 +729,18 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.minuteOfDay = env.minuteOfDay;
             p.samosborActive = env.samosborActive;
             p.samosborWarning = env.samosborWarning;
+            const Equipped* eq = reg.try_get<Equipped>(e);
+            const Inventory& inv = pool.inventory(id);
+            p.armed = (equipped_ranged(inv, eq) != kInvalidItem) ||
+                      (equipped_melee(inv, eq) != kInvalidItem);
+            if (rel != nullptr) {
+                const FactionFoe foe = nearest_faction_foe(
+                    reg, pool, *rel, layer, e, id, tr.pos, kFeudRadius);
+                if (foe.e != entt::null) {
+                    p.visibleHostiles = 1.0f;
+                    p.threatDistance = wrap_dist(tr.pos, foe.pos, kWorldExtent);
+                }
+            }
             p.currentIntent = brain.currentIntent;
             // Zeroed when hysteresis is off, so the two arms of the measurement
             // differ in exactly the mechanism under test and nothing else.

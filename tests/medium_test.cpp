@@ -3462,6 +3462,264 @@ void test_collapse_cursor(gpu::VulkanDevice& dev) {
     }
 }
 
+// ==== ХОД I (matwej.md §9.4): 4-БАЙТОВЫЙ ФРОНТИР И kModeFill =================
+// Проверяет три инварианта Хода I:
+//   1. mark_page_idx_dirty + kModeFill заполняет 512 субвокселей на GPU
+//      побитово по закону materialize_sub_page для всех 4 случаев (воздух,
+//      однородная среда kMatWater, пустая маска твёрдого kMatConcrete -> воздух,
+//      частичные маски), перевозя 4 Б/клетку вместо 1102 Б и даже при n=0.
+//   2. Полный mark_dirty перекрывает mark_page_idx_dirty (включая поздний
+//      перезаписью страницы после пометки фронтира).
+//   3. Живой open_frontier в ходе симуляции воды использует лёгкий канал
+//      last_fill_cells(), и мир остаётся бит-в-бит согласным (mirror.verify).
+void test_move_i_kmode_fill(gpu::VulkanDevice& dev) {
+    {
+        static World w;
+        const auto cAir = static_cast<std::uint32_t>(macro_index(10, 10, 10));
+        const auto cWater = static_cast<std::uint32_t>(macro_index(12, 10, 10));
+        const auto cConcEmpty =
+            static_cast<std::uint32_t>(macro_index(14, 10, 10));
+        const auto cPartConc =
+            static_cast<std::uint32_t>(macro_index(16, 10, 10));
+        const auto cPartRub =
+            static_cast<std::uint32_t>(macro_index(18, 10, 10));
+        const auto cOverride =
+            static_cast<std::uint32_t>(macro_index(20, 10, 10));
+
+        w.grid().set_cell(12, 10, 10, kMatWater);
+        w.grid().set_cell(14, 10, 10, kMatConcrete);
+        w.grid().set_cell(16, 10, 10, kMatConcrete);
+        for (int sz = 0; sz < 8; ++sz)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sx = 0; sx < 8; ++sx)
+                    if (((sx ^ sy ^ sz) & 1) == 0)
+                        w.grid().mask(16, 10, 10).set(sub_bit(sx, sy, sz));
+        w.grid().set_cell(18, 10, 10, kMatRubble);
+        for (int sz = 0; sz < 3; ++sz)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sx = 0; sx < 8; ++sx)
+                    w.grid().mask(18, 10, 10).set(sub_bit(sx, sy, sz));
+        w.grid().set_cell(20, 10, 10, kMatConcrete);
+
+        static gpu::VoxelMirror mirror;
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        static gpu::GpuMediumPass medium;
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+        const std::uint32_t cells[5] = {cAir, cWater, cConcEmpty, cPartConc,
+                                        cPartRub};
+        for (std::uint32_t ci : cells) materialize_sub_page(w, ci);
+        mirror.mark_page_idx_dirty(cells, 5);
+
+        std::uint64_t substep = 0;
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        CHECK(mirror.last_fill_cells().size() == 5u);
+        CHECK(mirror.last_flush_bytes() == 5u * sizeof(std::uint32_t));
+        CHECK(mirror.verify(w));
+
+        // Перекрытие полным mark_dirty после лёгкой пометки: поздняя мутация
+        // страницы обязана поехать полным путём и не затереться kModeFill.
+        CellType* op = materialize_sub_page(w, cOverride);
+        mirror.mark_page_idx_dirty(&cOverride, 1);
+        op[sub_bit(3, 3, 3)] = kMatWater;
+        mirror.mark_dirty(&cOverride, 1);
+        CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+        CHECK(mirror.last_fill_cells().empty());
+        CHECK(mirror.verify(w));
+
+        medium.destroy();
+        mirror.destroy();
+    }
+
+    {
+        static World w;
+        for (int x = 30; x <= 33; ++x)
+            for (int y = 30; y <= 33; ++y) {
+                w.grid().fill_cell(x, y, 10, kMatConcrete);
+                if (x == 30 || x == 33 || y == 30 || y == 33)
+                    w.grid().fill_cell(x, y, 11, kMatConcrete);
+            }
+        const auto pourCell =
+            static_cast<std::uint32_t>(macro_index(31, 31, 11));
+        const auto nbCell =
+            static_cast<std::uint32_t>(macro_index(32, 31, 11));
+        SubField<CellType>& f =
+            w.subfields().get_or_create<CellType>(kSubMaterialName);
+        CellType* pg = f.ensure_page(pourCell, w.grid().types()[pourCell]);
+        for (int sx = 0; sx < 8; ++sx)
+            for (int sy = 0; sy < 8; ++sy)
+                for (int sz = 0; sz < 3; ++sz)
+                    pg[sub_bit(sx, sy, sz)] = kMatWater;
+
+        static gpu::VoxelMirror mirror;
+        CHECK(mirror.init(dev));
+        CHECK(mirror.upload_all(w));
+        static gpu::GpuMediumPass medium;
+        CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+        medium.wake_cells(&pourCell, 1, w, mirror);
+
+        std::uint64_t substep = 0;
+        CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+        substep += 4;
+        CHECK(!mirror.last_fill_cells().empty());
+        medium.apply_readback(w, mirror);
+        for (int b = 0; b < 20; ++b) {
+            CHECK(run_batch(dev, mirror, medium, w, 4, substep));
+            substep += 4;
+            medium.apply_readback(w, mirror);
+        }
+        drain_seam(dev, mirror, medium, w, substep);
+        const CellType* np = f.page(nbCell);
+        int nbWater = 0;
+        if (np)
+            for (int b = 0; b < kSubVoxels; ++b)
+                if (np[b] == kMatWater) ++nbWater;
+        CHECK(nbWater > 0);
+        CHECK(mirror.verify(w));
+
+        medium.destroy();
+        mirror.destroy();
+    }
+}
+
+// ==== ХОД D (matwej.md §9.2/§9.4): БИТОВАЯ ЗАНЯТОСТЬ 256 KiB + 512 B SUMMARY =
+// Проверяет три инварианта Хода D:
+//   1. Точная раскладка с переплётом по 8³ брикам и 16³ summary при upload_all.
+//   2. GPU-движение (run_move/run_settle + kModeOccSummary) выставляет биты при
+//      входе материи в пустой брик (0 -> 1) и очищает при уходе (1 -> 0).
+//   3. Частичная очистка (одна из двух клеток брика опустела через CPU
+//      mark_dirty + kModeOccPatch) сохраняет summary-бит 1, а очистка
+//      последней клетки сбрасывает summary-бит в 0.
+void test_move_d_brick_occupancy(gpu::VulkanDevice& dev) {
+    auto occ_bit = [](const std::vector<std::uint32_t>& occ,
+                      std::uint32_t ci) -> bool {
+        const std::uint32_t cx = ci % static_cast<std::uint32_t>(kMacroDim);
+        const std::uint32_t cy =
+            (ci / static_cast<std::uint32_t>(kMacroDim)) %
+            static_cast<std::uint32_t>(kMacroDim);
+        const std::uint32_t cz =
+            ci / (static_cast<std::uint32_t>(kMacroDim) *
+                  static_cast<std::uint32_t>(kMacroDim));
+        const std::uint32_t bi =
+            (cx >> 3u) +
+            (cy >> 3u) * static_cast<std::uint32_t>(gpu::VoxelMirror::kBrickGridDim) +
+            (cz >> 3u) * static_cast<std::uint32_t>(
+                             gpu::VoxelMirror::kBrickGridDim *
+                             gpu::VoxelMirror::kBrickGridDim);
+        const std::uint32_t local =
+            (cx & 7u) | ((cy & 7u) << 3u) | ((cz & 7u) << 6u);
+        return ((occ[bi * gpu::VoxelMirror::kBrickWords + (local >> 5u)] >>
+                 (local & 31u)) &
+                1u) != 0u;
+    };
+    auto summary_bit = [](const std::vector<std::uint32_t>& occ, int bx, int by,
+                          int bz) -> bool {
+        const std::uint32_t bi = static_cast<std::uint32_t>(
+            bx + by * static_cast<int>(gpu::VoxelMirror::kBrickGridDim) +
+            bz * static_cast<int>(gpu::VoxelMirror::kBrickGridDim *
+                                  gpu::VoxelMirror::kBrickGridDim));
+        return ((occ[gpu::VoxelMirror::kOccSummaryWordOffset + (bi >> 5u)] >>
+                 (bi & 31u)) &
+                1u) != 0u;
+    };
+
+    static World w;
+    // Брик (1,2,3): полная статика (cls=1); брик (4,5,6): однородная вода (cls=3);
+    // брик (7,8,9): пусто (cls=0).
+    w.grid().fill_cell(8, 16, 24, kMatConcrete);
+    w.grid().set_cell(33, 41, 49, kMatWater);
+    const auto cBrickA = static_cast<std::uint32_t>(macro_index(8, 16, 24));
+    const auto cBrickB = static_cast<std::uint32_t>(macro_index(33, 41, 49));
+    const auto cBrickC = static_cast<std::uint32_t>(macro_index(56, 64, 72));
+
+    // Сцена 2: падение осыпи из брика (5,5,3) в брик (5,5,2) на плите (5,5,1).
+    for (int x = 41; x <= 45; ++x)
+        for (int y = 41; y <= 45; ++y)
+            w.grid().fill_cell(x, y, 15, kMatConcrete);
+    const auto rubSrc = static_cast<std::uint32_t>(macro_index(43, 43, 24));
+    const auto rubDst = static_cast<std::uint32_t>(macro_index(43, 43, 16));
+    SubField<CellType>& f =
+        w.subfields().get_or_create<CellType>(kSubMaterialName);
+    CellType* rpg = f.ensure_page(rubSrc, w.grid().types()[rubSrc]);
+    for (int sx = 3; sx < 5; ++sx)
+        for (int sy = 3; sy < 5; ++sy)
+            for (int sz = 0; sz < 4; ++sz)
+                rpg[sub_bit(sx, sy, sz)] = kMatRubble;
+
+    // Сцена 3: две занятые клетки в одном брике (10,10,10) + якорь в (10,10,9).
+    w.grid().fill_cell(80, 80, 79, kMatConcrete);
+    w.grid().fill_cell(81, 80, 79, kMatConcrete);
+    const auto sib1 = static_cast<std::uint32_t>(macro_index(80, 80, 80));
+    const auto sib2 = static_cast<std::uint32_t>(macro_index(81, 80, 80));
+    w.grid().set_cell(80, 80, 80, kMatConcrete);
+    w.grid().mask(80, 80, 80).set(sub_bit(0, 0, 0));
+    w.grid().fill_cell(81, 80, 80, kMatConcrete);
+
+    static gpu::VoxelMirror mirror;
+    CHECK(mirror.init(dev));
+    CHECK(mirror.upload_all(w));
+    static gpu::GpuMediumPass medium;
+    CHECK(medium.init(&dev, GIGA_SHADER_DIR, mirror));
+
+    std::vector<std::uint32_t> occ(
+        gpu::VoxelMirror::kOccTotalBytes / sizeof(std::uint32_t));
+    CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
+                   occ.data()));
+    CHECK(occ_bit(occ, cBrickA));
+    CHECK(summary_bit(occ, 1, 2, 3));
+    CHECK(occ_bit(occ, cBrickB));
+    CHECK(summary_bit(occ, 4, 5, 6));
+    CHECK(!occ_bit(occ, cBrickC));
+    CHECK(!summary_bit(occ, 7, 8, 9));
+    CHECK(occ_bit(occ, rubSrc));
+    CHECK(summary_bit(occ, 5, 5, 3));
+    CHECK(!occ_bit(occ, rubDst));
+    CHECK(!summary_bit(occ, 5, 5, 2));
+
+    // Падение из (5,5,3) в (5,5,2): ждём оседания и сна, проверяем 1->0 и 0->1.
+    medium.wake_cells(&rubSrc, 1, w, mirror);
+    std::uint64_t substep = 0;
+    for (int b = 0; b < 24; ++b) {
+        CHECK(run_batch(dev, mirror, medium, w, 8, substep));
+        substep += 8;
+        medium.apply_readback(w, mirror);
+    }
+    drain_seam(dev, mirror, medium, w, substep);
+    CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
+                   occ.data()));
+    CHECK(!occ_bit(occ, rubSrc));
+    CHECK(!summary_bit(occ, 5, 5, 3));
+    CHECK(occ_bit(occ, rubDst));
+    CHECK(summary_bit(occ, 5, 5, 2));
+    CHECK(mirror.verify(w));
+
+    // Сцена 3: карв sib1 очищает её бит в uOcc, но sib2 держит summary (10,10,10).
+    CarveScratch scratch;
+    CarveResult res;
+    CHECK(carve_at(w, 80, 80, 80, 0, 0, 0, 60000, 123, scratch, res));
+    mirror.mark_dirty(res.dirtyCells.data(), res.dirtyCells.size());
+    CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+    CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
+                   occ.data()));
+    CHECK(!occ_bit(occ, sib1));
+    CHECK(occ_bit(occ, sib2));
+    CHECK(summary_bit(occ, 10, 10, 10));
+
+    // Очистка последней клетки брика (10,10,10) обязана обнулить его summary-бит.
+    w.grid().clear_cell(81, 80, 80);
+    mirror.mark_dirty(&sib2, 1);
+    CHECK(run_batch(dev, mirror, medium, w, 0, substep));
+    CHECK(readback(dev, mirror.occ_buffer(), gpu::VoxelMirror::kOccTotalBytes,
+                   occ.data()));
+    CHECK(!occ_bit(occ, sib2));
+    CHECK(!summary_bit(occ, 10, 10, 10));
+    CHECK(mirror.verify(w));
+
+    medium.destroy();
+    mirror.destroy();
+}
+
 } // namespace
 
 int main() {
@@ -3490,6 +3748,8 @@ int main() {
         test_falling_is_not_geometry(dev);
         test_bitmask_gate_stand(dev);
         test_collapse_cursor(dev);
+        test_move_i_kmode_fill(dev);
+        test_move_d_brick_occupancy(dev);
     }
     test_carve_agnostic();
     dev.destroy();
