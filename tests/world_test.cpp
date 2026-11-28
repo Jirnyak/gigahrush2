@@ -940,6 +940,113 @@ static void test_step_up_one_atom() {
     CHECK(!aabb_overlaps_solid(w, stopped, vec3{0.2f, 0.2f, 0.4f}));
 }
 
+// ЛАЗАНЬЕ (CANON S30): тело, которое просит лезть и упёрлось в стену, лезет со
+// своей скоростью и переходит через край; скорость 0 или нет просьбы — стоит у
+// стены; потолок над стеной лезущего не пропускает и в твердь не пускает. Три
+// гравитации — закон изотропен: «вверх» берётся из вектора, не из буквы Z.
+static void test_climb_law() {
+    struct Frame {
+        GravityRegime regime;
+        vec3 g;
+        int up, upSign, walk, side;
+    };
+    const Frame frames[] = {
+        {GravityRegime::NegZ, {0, 0, -9.81f}, 2, +1, 0, 1},
+        {GravityRegime::NegY, {0, -9.81f, 0}, 1, +1, 2, 0},
+        {GravityRegime::PosX, {9.81f, 0, 0}, 0, -1, 1, 2},
+    };
+    // Кадр сцены → клетка мира. Высота растёт ПРОТИВ гравитации: при знаке «−»
+    // она идёт к меньшим координатам.
+    auto cell = [](const Frame& f, int walk, int side, int h, int& x, int& y, int& z) {
+        int c[3];
+        c[f.walk] = walk;
+        c[f.side] = side;
+        c[f.up] = f.upSign > 0 ? h : 60 - h;
+        x = c[0]; y = c[1]; z = c[2];
+    };
+    auto metres = [](const Frame& f, float walk, float side, float h) {
+        float c[3];
+        c[f.walk] = walk * kCellSize;
+        c[f.side] = side * kCellSize;
+        c[f.up] = (f.upSign > 0 ? h : 61.0f - h) * kCellSize;
+        return vec3{c[0], c[1], c[2]};
+    };
+    auto axis = [](const vec3& v, int comp) {
+        return comp == 0 ? v.x : comp == 1 ? v.y : v.z;
+    };
+    // `climbSpeed` 0 — не лазает; `ask` — писатель ставит просьбу; `ceiling` —
+    // плита над подходом и над стеной (лезть некуда).
+    auto run = [&](const Frame& f, float climbSpeed, bool ask, bool ceiling,
+                   bool& sawClimb) {
+        LevelStack stack;
+        const LayerId l = stack.push_layer();
+        World& w = stack.layer(l);
+        w.gravity().global = f.g;
+        w.gravity().regime = f.regime;
+        int x = 0, y = 0, z = 0;
+        for (int sd = 0; sd < 20; ++sd)
+            for (int wk = 0; wk < 30; ++wk) {
+                cell(f, wk, sd, 4, x, y, z);
+                w.grid().fill_cell(x, y, z, 1); // пол
+            }
+        for (int sd = 0; sd < 20; ++sd) {
+            cell(f, 12, sd, 5, x, y, z);
+            w.grid().fill_cell(x, y, z, 1); // стена 2 м поперёк хода
+            if (ceiling)
+                for (int wk = 9; wk <= 12; ++wk) {
+                    cell(f, wk, sd, 6, x, y, z);
+                    w.grid().fill_cell(x, y, z, 1); // потолок: над стеной ходу нет
+                }
+        }
+        Registry reg;
+        const Entity e = reg.create();
+        Transform tr;
+        tr.pos = metres(f, 10.5f, 10.5f, 5.5f);
+        tr.layer = l;
+        reg.emplace<Transform>(e, tr);
+        reg.emplace<Velocity>(e);
+        // Тело того же габарита, что житель: 0.8 × 0.8 × 1.8 м, длинная ось —
+        // вдоль гравитации кадра.
+        vec3 half{0.4f, 0.4f, 0.4f};
+        (f.up == 0 ? half.x : f.up == 1 ? half.y : half.z) = 0.9f;
+        reg.emplace<AABB>(e, AABB{half});
+        reg.emplace<GravityAffected>(e, GravityAffected{1.0f, false});
+        Climb c;
+        c.speed = climbSpeed;
+        reg.emplace<Climb>(e, c);
+        for (int i = 0; i < kSimHz; ++i) physics_step(reg, stack, kSimDt);
+        sawClimb = false;
+        int inSolid = 0; // тиков, когда тело оказалось в тверди — обязан быть ноль
+        for (int i = 0; i < 25 * kSimHz; ++i) {
+            vec3 v = reg.get<Velocity>(e).v;
+            (f.walk == 0 ? v.x : f.walk == 1 ? v.y : v.z) = 1.35f;
+            reg.get<Velocity>(e).v = v;
+            reg.get<Climb>(e).wants = ask;
+            physics_step(reg, stack, kSimDt);
+            sawClimb = sawClimb || reg.get<Climb>(e).climbing;
+            if (aabb_overlaps_solid(w, reg.get<Transform>(e).pos, half)) ++inSolid;
+        }
+        CHECK(inSolid == 0);
+        CHECK(!reg.get<Climb>(e).wants); // просьба гаснет физикой
+        return axis(reg.get<Transform>(e).pos, f.walk) / kCellSize;
+    };
+    for (const Frame& f : frames) {
+        bool saw = false;
+        // Лазающий переходит стену (её дальний край — клетка 13).
+        CHECK(run(f, 0.5f, true, false, saw) > 13.5f);
+        CHECK(saw);
+        // Ноль — частный случай закона: стоит у стены и не лезет.
+        CHECK(run(f, 0.0f, true, false, saw) < 12.0f);
+        CHECK(!saw);
+        // Без просьбы ведения не лезет и способный.
+        CHECK(run(f, 0.5f, false, false, saw) < 12.0f);
+        CHECK(!saw);
+        // Потолок: лезет (упор есть), но не проходит и в твердь не входит.
+        CHECK(run(f, 0.5f, true, true, saw) < 12.0f);
+        CHECK(saw);
+    }
+}
+
 // The universal stain layer ([world/stain.h]): additive per-atom RGB on solid
 // sub-voxels — blood + urine mix by channel addition, air holds no paint.
 static void test_stain_layer() {
@@ -1597,6 +1704,7 @@ int main() {
     test_destruct_all();
 
     test_step_up_one_atom();
+    test_climb_law();
     test_stain_layer();
     test_props_all();
     test_surface_all();

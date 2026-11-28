@@ -222,6 +222,25 @@ bool sweep_axis_walk(const World& w, vec3& pos, vec3 half, int comp,
     return hitLifted;
 }
 
+// КАСАНИЕ ПО КАСАТЕЛЬНОЙ — вход лазанья по шагу «вверх» (CANON S30): тело
+// вплотную к миру хоть одной боковой гранью. Ось «вверх» исключена — опора под
+// ногами касанием стены не считается. Зонд — две кожи: свип оставляет тело у
+// поверхности ближе одной (бинарный поиск до 1/4096 атома).
+bool touching_tangential(const World& w, const vec3& pos, const vec3& half,
+                         int upComp) {
+    constexpr float kProbe = 2.0f * kContactSkin;
+    for (int comp = 0; comp < 3; ++comp) {
+        if (comp == upComp) continue;
+        for (int side = -1; side <= 1; side += 2) {
+            vec3 p = pos;
+            float& c = comp == 0 ? p.x : comp == 1 ? p.y : p.z;
+            c += static_cast<float>(side) * kProbe;
+            if (aabb_overlaps_solid(w, p, half)) return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 void physics_step(Registry& reg, LevelStack& stack, float dt,
@@ -314,18 +333,41 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
                                                            : Mass{}.kg),
                           h);
 
-            // Whether the entity was moving "downward" (against up) this step,
-            // captured before collisions zero the velocity.
-            bool movingDown = dot(vel.v, up) <= 0.0f;
-
-            // The dominant axis of "up", shared by the auto-step and the
-            // ground check below.
+            // The dominant axis of "up", shared by the auto-step, the climb
+            // and the ground check below.
             float ax = std::fabs(up.x), ay = std::fabs(up.y),
                   az = std::fabs(up.z);
             int upComp = (az >= ax && az >= ay) ? 2 : (ay >= ax) ? 1 : 0;
             float upSign = axis_of(up, upComp) >= 0.0f ? 1.0f : -1.0f;
+
+            // ЛАЗАНЬЕ (CANON S30) — после гравитации и трения, потому что оно
+            // их ОТМЕНЯЕТ по оси «вверх»: держащееся тело не падает и не
+            // разгоняется, а поднимается ровно со своей скоростью лазанья.
+            // Касательная скорость (упор в стену) остаётся — именно она
+            // переносит тело через край, когда оно поднялось выше преграды.
+            // Два входа, оба по просьбе писателя ведения: упёрся по касательной
+            // в прошлом подшаге — или шаг нава строго вверх и есть касание.
+            Climb* climb = reg.try_get<Climb>(e);
+            bool climbNow = false;
+            if (climb != nullptr) {
+                if (s == 0) climb->climbing = false;
+                if (hasGravity && climb->speed > 0.0f &&
+                    ((climb->wants && climb->pressing) ||
+                     (climb->up &&
+                      touching_tangential(w, tr.pos, half, upComp)))) {
+                    climbNow = true;
+                    vel.v = vel.v - up * dot(vel.v, up) + up * climb->speed;
+                    climb->climbing = true;
+                }
+            }
+
+            // Whether the entity was moving "downward" (against up) this step,
+            // captured before collisions zero the velocity. После лазанья:
+            // лезущее тело движется вверх и опорой ничего не считает.
+            bool movingDown = dot(vel.v, up) <= 0.0f;
+
             auto* g = reg.try_get<GravityAffected>(e);
-            const bool canStep = g && g->grounded;
+            const bool canStep = g && g->grounded && !climbNow;
 
             // Integrate + collide, one axis at a time; grounded walkers step
             // over single sub-voxel atoms instead of snagging on them.
@@ -353,6 +395,20 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             if (hitX) vel.v.x = 0.0f;
             if (hitY) vel.v.y = 0.0f;
             if (hitZ) vel.v.z = 0.0f;
+
+            // УПОР ПО КАСАТЕЛЬНОЙ — вход лазанья СЛЕДУЮЩЕГО подшага. Ступенька,
+            // которую взял `sweep_axis_walk`, упором не считается: удар он
+            // возвращает только если подъём на атом хода не дал. Просьбы
+            // гаснут после последнего подшага тика — писатель ставит их заново.
+            if (climb != nullptr) {
+                climb->pressing = (upComp != 0 && hitX) ||
+                                  (upComp != 1 && hitY) ||
+                                  (upComp != 2 && hitZ);
+                if (s == steps - 1) {
+                    climb->wants = false;
+                    climb->up = false;
+                }
+            }
 
             // Ground check: a collision on the axis most aligned with "up",
             // while descending under active gravity, means we stand on solid.

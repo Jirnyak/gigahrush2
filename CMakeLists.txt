@@ -1039,7 +1039,12 @@ if(GIGA_BUILD_TESTS)
         # 16141 + 1 = 16142 на 2026-11-28 (bf6c2efd): `test_carve_clears_stain` —
         #   последнее пятно клетки вырезано -> страница сдана (`!paged`) плюс
         #   чтение нуля; пин в том коммите не подняли — поднят здесь.
-        PASS_REGULAR_EXPRESSION "16142/16142 checks passed"
+        # 16142 + 48 = 16190 на 2026-11-28 (CANON S30, лазанье): `test_climb_law` —
+        #   3 гравитации × 4 прогона × 4 проверки (итог хода, видели ли лазанье,
+        #   ноль тиков в тверди одним счётчиком, просьба погашена физикой).
+        #   Мутации прогнаны: лазанье выключено, просьба не нужна, «вверх» = +Z
+        #   литерал, просьба не гаснет — все четыре красные, база зелёная.
+        PASS_REGULAR_EXPRESSION "16190/16190 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -3125,8 +3130,10 @@ if(GIGA_BUILD_TESTS)
     # `BodyPart` и `BodyParts` — позу живого тела частями, которую пишет игра
     # и читает рендер. Обе — `GIGA_ROW` без пина байтов (ёмкость частей ещё
     # растёт с таблицей форм); стена держит форму: ни вектора, ни указателя.
+    # 34 -> 35 на 2026-11-28 (CANON S30, лазанье): `Climb` в
+    # `src/ecs/components.h` — способность, просьба ведения и отчёт физики.
     set_tests_properties(row_law PROPERTIES
-        PASS_REGULAR_EXPRESSION "GIGA_ROW_LAW=PASS structs=34 contours=34")
+        PASS_REGULAR_EXPRESSION "GIGA_ROW_LAW=PASS structs=35 contours=35")
 
     # АДРЕСА В КАРТЕ КОДА. Правило SKELETON.md — «утверждение без адреса не
     # строка этого файла», и без прибора оно держится памятью агента, то есть не
