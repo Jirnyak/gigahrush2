@@ -379,7 +379,7 @@ InvUiRequest inventory_ui_draw(InvUiState& st, const InvUiPolicy& policy,
         const char* desc = game::item_desc(sel.item);
         const bool isNote =
             d.category == static_cast<std::uint8_t>(game::ItemCategory::Note);
-        const bool isDoc = isNote || (desc && std::strchr(desc, '\n') != nullptr);
+        const bool isDoc = isNote || game::item_is_document(sel.item);
         if (isDoc) {
             ImGui::TextColored(kAmber, "%s",
                                isNote ? "[АРХИВ // ЗАПИСКА]"

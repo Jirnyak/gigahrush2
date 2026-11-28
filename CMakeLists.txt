@@ -3081,7 +3081,7 @@ if(GIGA_BUILD_TESTS)
         # -> «МЁРТВЫЙ ОЖИЛ», символ `.jx` без читателя -> «ЖИВОЙ БЕЗ ЧИТАТЕЛЯ».
         # ЖИВЫЕ 56 -> 57, WRITEONLY 8 -> 7 на 2026-11-26 (И3а): `role` ожила —
         # её читают `gait_swing_max` и `form_gait_pose` (кто машет — решает роль).
-        "GIGA_CSV_COLUMNS=PASS covered=4/16 columns=86 live=57 gen=10 writeonly=7 dead=12")
+        "GIGA_CSV_COLUMNS=PASS covered=4/16 columns=86 live=58 gen=10 writeonly=7 dead=11")
 
     # ПОЛНОТА КОНТУРА СТРОКИ МИРА. Разделение труда: ЗАКОН формы типа судит
     # компилятор (`GIGA_ROW@src/core/row_law.h` — vector/string/map/unique_ptr/

@@ -174,6 +174,7 @@ def main():
     verbs = load_verbs()
     verb_vecs = []
     use_mss = []
+    is_doc = []
     for i, r in enumerate(rows):
         if r["id"] in seen:
             die("duplicate id %r at row %d" % (r["id"], i))
@@ -265,6 +266,10 @@ def main():
         if use_ms > 0 and ue not in USE_VERB:
             die("row %d (%s): use_ms у предмета без глагола деяния" % (i, r["id"]))
         use_mss.append(use_ms)
+        # ДОКУМЕНТ — тег `document` столбца tags_all (теги через «|»): карточка
+        # инвентаря рисует его архивной рамкой. Признак из данных, а не из
+        # формы текста (переводов строки в описании).
+        is_doc.append(1 if "document" in (r.get("tags_all") or "").split("|") else 0)
 
         names.append("    %s," % cpp_string(r["name_ru"].strip()))
         # Authored flavour text — all 442 rows carry one. The inventory card
@@ -345,6 +350,11 @@ def main():
         fh.write("const std::array<std::uint32_t, kItemCount> kItemUseMs = {{\n")
         for iid, ms in zip(ids, use_mss):
             fh.write("    %d,  // %s\n" % (ms, iid))
+        fh.write("}};\n\n")
+        fh.write("// Документ (тег `document` в tags_all) — архивная рамка карточки.\n")
+        fh.write("const std::array<std::uint8_t, kItemCount> kItemIsDocument = {{\n")
+        for iid, dflag in zip(ids, is_doc):
+            fh.write("    %d,  // %s\n" % (dflag, iid))
         fh.write("}};\n\n")
         fh.write("const std::array<std::array<std::int16_t, kVerbCount>, "
                  "kItemCount> kItemVerbs = {{\n")

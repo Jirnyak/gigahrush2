@@ -245,7 +245,8 @@ set(GIGA_CSV_COLUMNS
     "items.csv:craft_tier:LIVE:.tier"
     "items.csv:tag_count:DEAD:тегового крафта нет — spec 03 проектирует его, не зная, что данные уже размечены"
     "items.csv:tags_hot:DEAD:тегового крафта нет"
-    "items.csv:tags_all:DEAD:тегового крафта нет"
+    # 2026-11-28: тег `document` — архивная рамка карточки инвентаря.
+    "items.csv:tags_all:LIVE:kItemIsDocument"
     "items.csv:desc_ru:LIVE:item_desc"
     "items.csv:mass_g:LIVE:.massG"
     "items.csv:light_radius_mm:LIVE:.lightRadiusMm"

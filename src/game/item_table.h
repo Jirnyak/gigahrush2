@@ -190,6 +190,13 @@ inline const char* item_desc(ItemId id) {
     return kItemDescs[static_cast<std::size_t>(id) - 1];
 }
 
+// Документ — тег `document` столбца tags_all (генерируется). Карточка инвентаря
+// рисует такой предмет архивной рамкой; признак из данных, не из формы текста.
+extern const std::array<std::uint8_t, kItemCount> kItemIsDocument;
+inline bool item_is_document(ItemId id) {
+    return kItemIsDocument[static_cast<std::size_t>(id) - 1] != 0;
+}
+
 // THE transfer primitive (problems.md §39): every path that puts items INTO an
 // 8x8 grid — pickup, container take, quest reward — so the stack law lives
 // once. Tops up same-item SAME-CONDITION stacks first (different wear is a

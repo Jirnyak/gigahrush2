@@ -2474,10 +2474,14 @@ int main(int argc, char** argv) {
     const int startFloor = shotFloorWanted ? shotFloor : kStartFloor;
     shotFloorWanted = false;
 
-    char* sdlPref = SDL_GetPrefPath("TenevikGames", "gigahrush2");
+    // ДО СТИМА — ПАПКА ЗАПУСКА (решение владельца 2026-11-28): сейвы, бинды и
+    // кэш света живут в cwd (`gigahrush2_save/`), как до волны, — на это
+    // завязаны все инструкции стендов и `rm -rf gigahrush2_save` перед замером.
+    // `--save-dir`/`GIGA_PREF_DIR`/`GIGA_SAVE_DIR` по-прежнему перекрывают.
+    // Переход на системный каталог = передать сюда
+    // `SDL_GetPrefPath("TenevikGames", "gigahrush2")` вместо nullptr.
     const giga::app::AppPaths paths =
-        giga::app::init_app_paths(saveDirCli, sdlPref);
-    if (sdlPref) SDL_free(sdlPref);
+        giga::app::init_app_paths(saveDirCli, nullptr);
 
     giga::app::CrashBuildInfo crashBuild{};
     crashBuild.buildKind = kBuildKind;
@@ -3419,7 +3423,11 @@ int main(int argc, char** argv) {
     // значением, слово выбирает тот, кто знает, что жал человек. Живёт две
     // секунды сим-времени. Тело, чьё окно было открыто, помнится сущностью: при
     // вселении посреди деяния «прервано» новому телу не достаётся.
-    char deedNote[48] = {};
+    // Ёмкость — в БАЙТАХ UTF-8: кириллица по 2 байта, и русские строки волны
+    // 2026-11-28 («Подождите окончания поездки на лифте» — 69 Б) в прежние 48 Б
+    // не влезали — `-Wformat-truncation` резал их на экране. 128 Б = 63 знака
+    // кириллицы плюс нуль, с запасом над самой длинной строкой.
+    char deedNote[128] = {};
     std::uint64_t deedNoteAt = 0;
     Entity deedBody = entt::null;
     const auto deed_say = [&](game::ServeRefusal r, game::VerbId v) {

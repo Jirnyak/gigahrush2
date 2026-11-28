@@ -1480,7 +1480,7 @@ static void test_place_room_capacity_and_crowd() {
         NpcId walkerId = 0;
         const Entity walker = make_body(reg, pool, bx, by, bz, walkerId);
         set_needs_sleepy(pool, walkerId);
-        CHECK(ai_init(reg, kLayer) == static_cast<int>(capA + 1));
+        CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(capA + 1));
 
         const PlaceTick pt =
             place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/1, nullptr, &zones);
@@ -1502,7 +1502,7 @@ static void test_place_room_capacity_and_crowd() {
             set_needs_sleepy(pool, nid);
             walkers.push_back(e);
         }
-        CHECK(ai_init(reg, kLayer) == static_cast<int>(capA * 2u));
+        CHECK(ai_init(reg, kLayer) == static_cast<std::uint32_t>(capA * 2u));
 
         const PlaceTick pt =
             place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/1, nullptr, &zones);
