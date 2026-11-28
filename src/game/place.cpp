@@ -21,10 +21,13 @@
 #include "game/item_table.h"  // kItemVerbs — что предмет утоляет
 #include "game/loot.h"        // Pickup — лежащие на полу пикапы не утоляются serve
 #include "game/needs.h"       // needs_row_for — ОДНА строка нужд на всех решателей
+#include "game/prop_system.h" // anchor_from_surface — якорь от SurfaceFace
 #include "game/room_supply.h" // room_at_pos — клетка пикапа для согласования с serve
 #include "game/serve.h"       // деяние нужды на месте (S24) — политика там
+#include "game/settle.h"      // cell_standable_on_grid, RoomTargetAnchor
 #include "world/gravity.h"    // GravityFrame / steer_frame_of — плоскость ходьбы
 #include "world/macro_grid.h" // MacroGrid — проверка твёрдой плиты при выборе цели
+#include "world/surface.h"    // surface_face_at — обновление якоря после карва
 #include "world/types.h"      // kCellSize, kMacroDim, wrap_macro
 
 namespace giga::game {
@@ -142,41 +145,55 @@ std::int32_t place_interest_adj(std::span<const std::int16_t, kVerbCount> decl,
 // избегает точек внутри сплошной твёрдой плиты (grid->mask.full()) или в
 // несвязанной высоте бокса, предпочитая ближайшую клетку, принадлежащую
 // roomId и входящую в её ZonePartition.
-int errand_target_cell(const FloorRooms& fr, RoomId roomId,
+int errand_target_cell(FloorRooms& fr, RoomId roomId,
                        const ZoneNav* zones, const MacroGrid* grid,
+                       const GravityField* gravity,
                        int cx, int cy, int cz, int& tx, int& ty, int& tz) {
+    if (roomId == kNoRoom || roomId > fr.features.size()) return -1;
     const int fallback = place_target_cell(fr, roomId, cx, cy, cz, tx, ty, tz);
-    if (fallback < 0) return -1;
-    auto cell_ok = [&](int ox, int oy, int oz, bool needZone) {
+    const GravityRegime reg =
+        gravity != nullptr ? gravity->regime : GravityRegime::NegZ;
+    auto cell_ok = [&](int ox, int oy, int oz, bool needZone, bool needStand) {
         if (room_at(fr, ox, oy, oz) != roomId) return false;
         if (grid != nullptr && grid->mask(ox, oy, oz).full()) return false;
+        if (needStand && grid != nullptr &&
+            !cell_standable_on_grid(*grid, reg, ox, oy, oz))
+            return false;
         if (needZone && zones != nullptr && zones->part.built() &&
             zones->part.cell(ox, oy, oz) != roomId)
             return false;
         return true;
     };
     const bool hasZones = zones != nullptr && zones->part.built();
-    if (cell_ok(tx, ty, tz, hasZones)) return fallback;
+    if (fallback >= 0 && cell_ok(tx, ty, tz, hasZones, grid != nullptr))
+        return fallback;
 
+    const RoomFeature& rf = fr.features[roomId - 1];
     int bestDist = -1;
     int bx = tx, by = ty, bz = tz;
+    std::size_t bestBi = fr.boxes.size();
     for (int pass = 0; pass < 2 && bestDist < 0; ++pass) {
+        const bool needStand = (grid != nullptr);
         const bool needZone = (pass == 0);
         if (needZone && !hasZones) continue;
-        for (const RoomBox& box : fr.room_boxes(roomId)) {
+        for (std::uint32_t b = 0; b < rf.boxCount; ++b) {
+            const std::size_t bi = static_cast<std::size_t>(rf.boxFirst) + b;
+            if (bi >= fr.boxes.size()) break;
+            const RoomBox& box = fr.boxes[bi];
             for (int dz = 0; dz < box.sz; ++dz)
                 for (int dy = 0; dy < box.sy; ++dy)
                     for (int dx = 0; dx < box.sx; ++dx) {
                         const int ox = wrap_macro(box.x + dx);
                         const int oy = wrap_macro(box.y + dy);
                         const int oz = wrap_macro(box.z + dz);
-                        if (!cell_ok(ox, oy, oz, needZone)) continue;
+                        if (!cell_ok(ox, oy, oz, needZone, needStand)) continue;
                         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
                         if (bestDist < 0 || d < bestDist) {
                             bestDist = d;
                             bx = ox;
                             by = oy;
                             bz = oz;
+                            bestBi = bi;
                         }
                     }
         }
@@ -185,9 +202,34 @@ int errand_target_cell(const FloorRooms& fr, RoomId roomId,
         tx = bx;
         ty = by;
         tz = bz;
+        if (grid != nullptr && !fr.boxAnchors.empty() &&
+            fr.boxAnchors.size() == fr.boxes.size() &&
+            bestBi < fr.boxAnchors.size()) {
+            RoomTargetAnchor& a = fr.boxAnchors[bestBi];
+            a.cx = static_cast<std::uint8_t>(bx);
+            a.cy = static_cast<std::uint8_t>(by);
+            a.cz = static_cast<std::uint8_t>(bz);
+            a.valid = 1u;
+            const GravityFrame gf = regime_frame(reg);
+            if (gf.pull) {
+                const CellStep step = regime_down(reg);
+                const SurfaceFace sf = surface_face_at(
+                    *grid, wrap_macro(bx + step.x), wrap_macro(by + step.y),
+                    wrap_macro(bz + step.z), anchor_face_pack(gf.axis, gf.upSign));
+                if (sf.columns > 0) a.support = anchor_from_surface(sf);
+            }
+        }
         return bestDist;
     }
-    return fallback;
+    if (grid != nullptr && !fr.boxAnchors.empty() &&
+        fr.boxAnchors.size() == fr.boxes.size()) {
+        for (std::uint32_t b = 0; b < rf.boxCount; ++b) {
+            const std::size_t bi = static_cast<std::size_t>(rf.boxFirst) + b;
+            if (bi >= fr.boxAnchors.size()) break;
+            fr.boxAnchors[bi].valid = 0;
+        }
+    }
+    return -1;
 }
 
 } // namespace
@@ -277,13 +319,28 @@ std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
 
 int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
                       int& tx, int& ty, int& tz) {
-    const auto boxes = fr.room_boxes(id);
-    if (boxes.empty()) return -1;
+    if (id == kNoRoom || id > fr.features.size()) return -1;
+    const RoomFeature& f = fr.features[id - 1];
+    if (f.boxCount == 0) return -1;
+    const bool useAnchors =
+        !fr.boxAnchors.empty() && fr.boxAnchors.size() == fr.boxes.size();
     int best = -1;
-    for (const RoomBox& box : boxes) {
-        const int ox = wrap_macro(box.x + box.sx / 2);
-        const int oy = wrap_macro(box.y + box.sy / 2);
-        const int oz = wrap_macro(box.z);
+    for (std::uint32_t b = 0; b < f.boxCount; ++b) {
+        const std::size_t bi = static_cast<std::size_t>(f.boxFirst) + b;
+        if (bi >= fr.boxes.size()) break;
+        int ox = 0, oy = 0, oz = 0;
+        if (useAnchors) {
+            const RoomTargetAnchor& anc = fr.boxAnchors[bi];
+            if (!anc.valid) continue;
+            ox = anc.cx;
+            oy = anc.cy;
+            oz = anc.cz;
+        } else {
+            const RoomBox& box = fr.boxes[bi];
+            ox = wrap_macro(box.x + box.sx / 2);
+            oy = wrap_macro(box.y + box.sy / 2);
+            oz = wrap_macro(box.z);
+        }
         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
         if (best < 0 || d < best) {
             best = d;
@@ -298,15 +355,25 @@ int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
 int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int cz,
                       int& tx, int& ty, int& tz) {
     if (r.boxCount == 0) return -1;
+    const bool useAnchors =
+        !fr.boxAnchors.empty() && fr.boxAnchors.size() == fr.boxes.size();
     int best = -1;
     for (std::uint32_t b = 0; b < r.boxCount; ++b) {
         const std::size_t bi = static_cast<std::size_t>(r.boxFirst) + b;
         if (bi >= fr.boxes.size()) break; // пул боксов короче заявки — не UB
-        const RoomBox& box = fr.boxes[bi];
-        const int ox = wrap_macro(box.x + box.sx / 2);
-        const int oy = wrap_macro(box.y + box.sy / 2);
-        // Floor level of the room box: oz = box.z (where feet stand), avoiding mid-air
-        const int oz = wrap_macro(box.z);
+        int ox = 0, oy = 0, oz = 0;
+        if (useAnchors) {
+            const RoomTargetAnchor& anc = fr.boxAnchors[bi];
+            if (!anc.valid) continue;
+            ox = anc.cx;
+            oy = anc.cy;
+            oz = anc.cz;
+        } else {
+            const RoomBox& box = fr.boxes[bi];
+            ox = wrap_macro(box.x + box.sx / 2);
+            oy = wrap_macro(box.y + box.sy / 2);
+            oz = wrap_macro(box.z);
+        }
         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
         if (best < 0 || d < best) {
             best = d;
@@ -451,6 +518,12 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
                     if (ceilBound - lower <= best) continue;
                     for (const RoomId id : fr.bins[bi]) {
                         if (id == kNoRoom || id > fr.features.size()) continue;
+                        if (!fr.boxAnchors.empty() &&
+                            fr.boxAnchors.size() == fr.boxes.size()) {
+                            int ax = 0, ay = 0, az = 0;
+                            if (place_target_cell(fr, id, cx, cy, cz, ax, ay, az) < 0)
+                                continue;
+                        }
                         ++out.judged;
                         const std::int32_t cost = place_cost(fr, id, cx, cy, cz);
                         VerbId candVerb = static_cast<VerbId>(kVerbCount);
@@ -618,8 +691,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         bool haveTarget = false;
         if (plan.room != kNoRoom && goalValid) {
             haveTarget =
-                errand_target_cell(fr, plan.room, zones, grid, cx, cy, cz,
-                                   tx, ty, tz) >= 0;
+                errand_target_cell(fr, plan.room, zones, grid, gravity,
+                                   cx, cy, cz, tx, ty, tz) >= 0;
             // ПРИБЫЛ = ВНУТРИ ОБЪЯВЛЕННОЙ КОМНАТЫ (или в её целевой клетке при
             // перекрытии).
             if (room_at(fr, cx, cy, cz) == plan.room ||
@@ -631,6 +704,14 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
                 goalValid = false;
+            } else if (!haveTarget) {
+                ++out.unreachable;
+                room_occupant_add(fr, plan.room, -1);
+                plan.room = kNoRoom;
+                plan.verb = static_cast<VerbId>(kVerbCount);
+                plan.nextPickAt = stagger();
+                ++out.idle;
+                continue;
             }
         }
 
@@ -693,8 +774,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             ++out.zoneDistBodies;
             if (!haveTarget) {
                 haveTarget =
-                    errand_target_cell(fr, plan.room, zones, grid, cx,
-                                       cy, cz, tx, ty, tz) >= 0;
+                    errand_target_cell(fr, plan.room, zones, grid, gravity,
+                                       cx, cy, cz, tx, ty, tz) >= 0;
             }
             const vec3 dir =
                 haveTarget

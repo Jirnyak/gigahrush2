@@ -334,10 +334,155 @@ void real_floors_embody_standing() {
     }
 }
 
+void faction_owner_and_support_across_floor_kinds() {
+    struct Row {
+        int number;
+        FloorKind kind;
+        bool padicStrictFloor;
+    };
+    const Row rows[] = {
+        {0, FloorKind::Residential, true},
+        {2, FloorKind::Commercial, true},
+        {4, FloorKind::Industrial, true},
+        {6, FloorKind::Derelict, true},
+        {kKhrushiFloorNumber, FloorKind::Khrushi, false},
+    };
+    for (const Row& row : rows) {
+        Registry ecs;
+        NpcPool pool;
+        pool.init();
+        FloorRegistry reg;
+        LevelStack stack;
+        FloorStreamer stream;
+        stream.init(stack, /*keepRadius=*/0);
+        const std::uint32_t seed = 2026u;
+        stream.add_module(reg, row.number, row.kind, seed);
+        const std::uint32_t pop = stream.seed_all_modules(pool);
+        CHECK(pop > 0u);
+
+        NpcId playerId = kInvalidNpc;
+        const LoadResult r =
+            stream.ensure_loaded(stack, reg, ecs, pool, row.number, playerId);
+        CHECK(r.layer != kInvalidLayer);
+        CHECK(r.player != entt::null);
+        const World& w = stack.layer(r.layer);
+        FloorRooms zones;
+        rooms_build(zones, row.number, floor_spec(row.kind), seed);
+
+        std::uint32_t bodies = 0, standing = 0, inZone = 0, floorStand = 0;
+        std::uint32_t exitClear = 0, sameOwner = 0;
+        for (auto e : ecs.view<const NpcRef, const Transform, const AABB>()) {
+            const Transform& tr = ecs.get<const Transform>(e);
+            if (tr.layer != r.layer) continue;
+            const NpcId id = ecs.get<const NpcRef>(e).id;
+            const int cx = cell_of_metres(tr.pos.x);
+            const int cy = cell_of_metres(tr.pos.y);
+            const int cz = cell_of_metres(tr.pos.z);
+            ++bodies;
+            if (stands(w, tr.pos, ecs.get<const AABB>(e).half)) ++standing;
+            if (cell_has_exit_clearance(w.grid(), w.gravity().regime, cx, cy, cz))
+                ++exitClear;
+            if (floor_standable(w, cx, cy, cz)) ++floorStand;
+            const RoomId rid = room_at(zones, cx, cy, cz);
+            if (rid != kNoRoom && rid <= zones.size()) {
+                ++inZone;
+                if (zones.room_owner(rid) ==
+                    static_cast<std::uint16_t>(pool.faction(id) + 1u))
+                    ++sameOwner;
+            }
+        }
+        CHECK(bodies == pop);
+        CHECK(standing == bodies);
+        CHECK(inZone == bodies);
+        CHECK(exitClear == bodies);
+        CHECK(sameOwner * 100u >= bodies * 90u);
+        if (row.padicStrictFloor) {
+            CHECK(floorStand * 100u >= bodies * 95u);
+        } else {
+            CHECK(floorStand > 0u);
+        }
+    }
+}
+
+void dead_and_hostile_slot_regression_gate() {
+    { // 1) Запертый 1x1 карман: на 4 стороны бетон -> не сажаем тело в ловушку
+        World w;
+        w.grid().fill_cell(30, 30, 9, kMatConcrete);
+        w.grid().fill_cell(29, 30, 10, kMatConcrete);
+        w.grid().fill_cell(31, 30, 10, kMatConcrete);
+        w.grid().fill_cell(30, 29, 10, kMatConcrete);
+        w.grid().fill_cell(30, 31, 10, kMatConcrete);
+        FloorRooms rooms;
+        rooms_reset(rooms);
+        const RoomBox sealed{30, 30, 10, 1, 1, 1};
+        CHECK(room_declare(rooms, &sealed, 1, 0,
+                           static_cast<std::uint16_t>(
+                               static_cast<std::uint16_t>(Faction::Liquidators) + 1u),
+                           nullptr) != kNoRoom);
+        Settlement s;
+        settle_begin(s, w, rooms);
+        vec3 p{};
+        CHECK(!settle_spot(s, 77u, kHalf,
+                           static_cast<std::uint16_t>(Faction::Liquidators), p));
+        CHECK(s.homeless == 1u);
+    }
+    { // 2) Дыра в полу + две фракции (Citizens vs Cultists): своя земля без падения
+        World w;
+        for (int y = 20; y < 24; ++y)
+            for (int x = 20; x < 24; ++x)
+                w.grid().fill_cell(x, y, 9, kMatConcrete);
+        w.grid().clear_cell(21, 21, 9);
+        w.grid().clear_cell(22, 21, 9);
+        for (int y = 40; y < 44; ++y)
+            for (int x = 40; x < 44; ++x)
+                w.grid().fill_cell(x, y, 9, kMatConcrete);
+
+        FloorRooms rooms;
+        rooms_reset(rooms);
+        const RoomBox rCit{20, 20, 10, 4, 4, 1};
+        const RoomBox rCul{40, 40, 10, 4, 4, 1};
+        const RoomId idCit = room_declare(
+            rooms, &rCit, 1, 0,
+            static_cast<std::uint16_t>(static_cast<std::uint16_t>(Faction::Citizens) + 1u),
+            nullptr);
+        const RoomId idCul = room_declare(
+            rooms, &rCul, 1, 0,
+            static_cast<std::uint16_t>(static_cast<std::uint16_t>(Faction::Cultists) + 1u),
+            nullptr);
+        CHECK(idCit != kNoRoom && idCul != kNoRoom);
+
+        Settlement s;
+        settle_begin(s, w, rooms);
+        for (std::uint32_t i = 0; i < 4; ++i) {
+            vec3 pc{};
+            CHECK(settle_spot(s, 100u + i, kHalf,
+                              static_cast<std::uint16_t>(Faction::Citizens), pc));
+            const int cx = cell_of_metres(pc.x), cy = cell_of_metres(pc.y),
+                      cz = cell_of_metres(pc.z);
+            CHECK(room_at(rooms, cx, cy, cz) == idCit);
+            CHECK(floor_standable(w, cx, cy, cz));
+            CHECK(stands(w, pc, kHalf));
+
+            vec3 pk{};
+            CHECK(settle_spot(s, 200u + i, kHalf,
+                              static_cast<std::uint16_t>(Faction::Cultists), pk));
+            const int kx = cell_of_metres(pk.x), ky = cell_of_metres(pk.y),
+                      kz = cell_of_metres(pk.z);
+            CHECK(room_at(rooms, kx, ky, kz) == idCul);
+            CHECK(floor_standable(w, kx, ky, kz));
+            CHECK(stands(w, pk, kHalf));
+        }
+        CHECK(s.settledOwnOwner == 8u);
+        CHECK(s.settledOtherOwner == 0u);
+    }
+}
+
 } // namespace settle_test
 
 static void test_settle_all() {
     settle_test::stand_point_is_frame_agnostic();
     settle_test::settle_law();
     settle_test::real_floors_embody_standing();
+    settle_test::faction_owner_and_support_across_floor_kinds();
+    settle_test::dead_and_hostile_slot_regression_gate();
 }

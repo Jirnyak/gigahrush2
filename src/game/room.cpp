@@ -12,6 +12,7 @@ void rooms_reset(FloorRooms& fr) {
     fr.features.clear();
     fr.records.clear();
     fr.boxes.clear();
+    fr.boxAnchors.clear();
     fr.declaredArchetypes.clear();
     fr.declaredArchetypes.push_back({}); // слот 0: нулевой профиль декларации
     fr.supplies.clear();

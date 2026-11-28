@@ -60,6 +60,7 @@
 #include "game/encumbrance.h" // carried weight -> mass, speed, fatigue, noise
 #include "game/door.h"   // НОВАЯ дверь: зарастание материей (2026-08-28)
 #include "game/room.h"   // комнаты этажа: объявляет модуль, roomAt (2026-08-28)
+#include "game/settle.h" // rooms_bake_anchors — O(1) опорные цели комнат (Инкремент D)
 #include "game/room_supply.h" // ОСНАЩЕНИЕ+ЗАПАС комнат из сущностей (S12.4)
 #include "game/place.h"    // выбор места суммой S13.2 и ход к нему
 #include "game/serve.h"    // деяние нужды на месте (S24) — замыкание цикла
@@ -3161,6 +3162,7 @@ int main(int argc, char** argv) {
             game::rooms_declare(floorRooms, currentFloor,
                                 *spec_for_floor(currentFloor),
                                 streamer.floor_seed_of(registry, currentFloor));
+            game::rooms_bake_anchors(floorRooms, stack.layer(l0));
             refresh_floor_mobs(reg, stack.layer(l0), currentFloor, l0, /*tick*/ 0);
             // Развилка сущностей (S20.6): сидеры ИЛИ записи снимка.
             arrivedRestored = floor_entity_half(l0, currentFloor, /*tick*/ 0);
@@ -4018,6 +4020,7 @@ int main(int argc, char** argv) {
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+        game::rooms_bake_anchors(floorRooms, stack.layer(nl));
         const auto tR1 = std::chrono::steady_clock::now();
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
         const auto tR2 = std::chrono::steady_clock::now();
@@ -4545,6 +4548,7 @@ int main(int argc, char** argv) {
         game::rooms_declare(floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+        game::rooms_bake_anchors(floorRooms, stack.layer(nl));
         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
         arrivedRestored = floor_entity_half(nl, currentFloor, simTick);
         diffusion_driver_on_floor_built(diffusionDriver, stack.layer(nl), nl);
@@ -12409,6 +12413,7 @@ int main(int argc, char** argv) {
                             floorRooms, currentFloor,
                             *spec_for_floor(currentFloor),
                             streamer.floor_seed_of(registry, currentFloor));
+                        game::rooms_bake_anchors(floorRooms, stack.layer(nl));
                         refresh_floor_mobs(reg, stack.layer(nl), currentFloor, nl, simTick);
                         // РАЗВИЛКА S20.6 — тот же закон, что у клавиатурной
                         // поездки: сидеры ИЛИ записи снимка, не оба. Второй

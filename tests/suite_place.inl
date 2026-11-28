@@ -45,13 +45,18 @@
 #include "game/action.h"      // Acting/acting_busy — занятость деянием (S22)
 #include "game/ai.h"          // ai_init/ai_patrol_step/kFleeSpeed — наряд и бегство
 #include "game/embody.h"      // embody
+#include "game/floor_gen.h"   // floor_standable
 #include "game/guide.h"       // Steer/SteerRank/guide_step — ЗАЯВКА и единственный писатель
 #include "game/place.h"
 #include "game/serve.h"       // ServeTick/kVerbAction — деяние нужды (S24)
+#include "game/settle.h"      // rooms_bake_anchors, cell_has_exit_clearance
 #include "game/prop_table.h"  // kPropVerbs — «койка 17» из живых данных
 #include "game/room.h"
 #include "game/room_supply.h" // supply_add_prop — ОСНАЩЕНИЕ настоящей дверью
 #include "game/wander.h"      // wander_init/wander_step — слабейший заявитель + MacroGrid
+#include "world/anchor.h"     // anchor_alive
+#include "world/surface.h"    // surface_face_at
+#include "world/world.h"      // World
 
 namespace place_suite {
 
@@ -1515,6 +1520,101 @@ static void test_place_room_capacity_and_crowd() {
     }
 }
 
+static void test_place_target_anchor_support_and_isotropy() {
+    using namespace place_suite;
+    // 1) Центр бокса = дыра в полу, сосед справа = колонна: `rooms_bake_anchors`
+    // выбирает живую опору с боковым выходом и SubVoxelAnchor, не центр.
+    World w;
+    for (int y = 30; y < 35; ++y)
+        for (int x = 30; x < 35; ++x)
+            w.grid().fill_cell(x, y, 9, kMatConcrete);
+    w.grid().clear_cell(32, 32, 9);                // дыра ровно в центре бокса
+    w.grid().fill_cell(33, 32, 10, kMatConcrete);  // колонна в (33,32,10)
+
+    FloorRooms fr;
+    rooms_reset(fr);
+    std::int16_t dBed[kVerbCount] = {};
+    dBed[kVerbSleep] = 30;
+    const RoomBox rbox{30, 30, 10, 5, 5, 3};
+    const RoomId home = room_declare(fr, &rbox, 1, 0, 1, dBed);
+    CHECK(home != kNoRoom);
+    rooms_bake_anchors(fr, w);
+    CHECK(fr.boxAnchors.size() == 1u);
+    CHECK(fr.boxAnchors[0].valid == 1u);
+    CHECK(anchor_alive(w, fr.boxAnchors[0].support));
+    CHECK(surface_face_at(w.grid(), fr.boxAnchors[0].support.cx,
+                          fr.boxAnchors[0].support.cy,
+                          fr.boxAnchors[0].support.cz,
+                          fr.boxAnchors[0].support.face)
+              .columns >= 16u);
+
+    int tx = 0, ty = 0, tz = 0;
+    CHECK(place_target_cell(fr, home, 25, 32, 10, tx, ty, tz) >= 0);
+    CHECK(!(tx == 32 && ty == 32));
+    CHECK(!(tx == 33 && ty == 32));
+    CHECK(tz == 10);
+    CHECK(floor_standable(w, tx, ty, tz));
+    CHECK(cell_has_exit_clearance(w.grid(), GravityRegime::NegZ, tx, ty, tz));
+
+    // 2) Потеря опоры под запечённым якорем: `place_errand_step` чинит якорь на
+    // уцелевшую клетку комнаты, а при полном сносе пола сам снимает цель.
+    Registry reg;
+    NpcPool pool;
+    pool.init();
+    NpcId nid = 0;
+    const Entity walker = make_body(reg, pool, 29, 32, 10, nid);
+    set_needs_sleepy(pool, nid);
+    CHECK(ai_init(reg, kLayer) == 1);
+
+    ZoneNav zones;
+    arm_zones_errand(zones, 28, static_cast<RoomId>(2), home);
+    w.grid().fill_cell(29, 32, 9, kMatConcrete);
+    w.grid().clear_cell(tx, ty, 9); // карв вынес опору прямо под якорем!
+    const PlaceTick pt1 = place_errand_step(
+        reg, pool, fr, kLayer, 0.0, /*tick=*/1, &w.gravity(), &zones, nullptr,
+        nullptr, &w.grid());
+    CHECK(pt1.picked == 1u);
+    CHECK(reg.get<ErrandPlan>(walker).room == home);
+    CHECK(fr.boxAnchors[0].valid == 1u);
+    const int rx = fr.boxAnchors[0].cx, ry = fr.boxAnchors[0].cy,
+              rz = fr.boxAnchors[0].cz;
+    CHECK(!(rx == tx && ry == ty && rz == tz));
+    CHECK(floor_standable(w, rx, ry, rz));
+
+    // Сносим остаток пола и колонну под всей комнатой -> якорь гаснет сам, тело бросает цель.
+    for (int y = 30; y < 35; ++y)
+        for (int x = 30; x < 35; ++x)
+            w.grid().clear_cell(x, y, 9);
+    w.grid().clear_cell(33, 32, 10);
+    const PlaceTick ptDead = place_errand_step(
+        reg, pool, fr, kLayer, 10.0, /*tick=*/2, &w.gravity(), &zones, nullptr,
+        nullptr, &w.grid());
+    CHECK(ptDead.unreachable == 1u);
+    CHECK(reg.get<ErrandPlan>(walker).room == kNoRoom);
+    CHECK(fr.boxAnchors[0].valid == 0u);
+    DemandE3 dem[kVerbCount] = {};
+    dem[kVerbSleep] = kDemandFull;
+    const PlacePick deadPick = place_pick(fr, dem, 25, 32, 10);
+    CHECK(deadPick.room == kNoRoom);
+
+    // 3) Инверсная гравитация PosZ: пол бокса z=10..12 лежит в z=12 (под плитой z=13).
+    World inv;
+    inv.gravity().regime = GravityRegime::PosZ;
+    for (int y = 60; y < 64; ++y)
+        for (int x = 60; x < 64; ++x)
+            inv.grid().fill_cell(x, y, 13, kMatConcrete);
+    FloorRooms invFr;
+    rooms_reset(invFr);
+    const RoomBox invBox{60, 60, 10, 4, 4, 3};
+    const RoomId invId = room_declare(invFr, &invBox, 1, 0, 1, dBed);
+    CHECK(invId != kNoRoom);
+    rooms_bake_anchors(invFr, inv);
+    int ix = 0, iy = 0, iz = 0;
+    CHECK(place_target_cell(invFr, invId, 55, 62, 12, ix, iy, iz) >= 0);
+    CHECK(iz == 12);
+    CHECK(floor_standable(inv, ix, iy, iz));
+}
+
 static void test_place_all() {
     test_place_demand_from_needs();
     test_place_interest_is_a_dot_product();
@@ -1527,4 +1627,5 @@ static void test_place_all() {
     test_place_errand_walks();
     test_place_one_velocity_write_per_tick();
     test_place_room_capacity_and_crowd();
+    test_place_target_anchor_support_and_isotropy();
 }

@@ -319,12 +319,16 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
                      "[voploshenie] этаж %d: тел %u, стоят %u, в воздухе %u "
                      "(до 1 м %u, до 3 м %u, до 10 м %u, выше %u; макс %.2f м), "
                      "без тверди под ногами %u | без места %u (остались на "
-                     "числе), зон %zu, клеток перебрано %u\n",
+                     "числе), зон %zu, клеток перебрано %u | земля: своя %u / "
+                     "нейтр %u / чужая %u, floor_standable %u, якорь %u\n",
                      fm.number, censusBodies, censusStanding,
                      censusDrop[0] + censusDrop[1] + censusDrop[2] + censusDrop[3],
                      censusDrop[0], censusDrop[1], censusDrop[2], censusDrop[3],
                      static_cast<double>(censusMaxM), censusVoid,
-                     settle.homeless, zones.size(), settle.probes);
+                     settle.homeless, zones.size(), settle.probes,
+                     settle.settledOwnOwner, settle.settledNeutral,
+                     settle.settledOtherOwner, settle.settledFloorStandable,
+                     settle.settledSubSupport);
 }
 
 std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(

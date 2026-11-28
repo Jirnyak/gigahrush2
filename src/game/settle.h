@@ -28,17 +28,21 @@
 // небе, 339 разбивались; на плотной — 142 из 420 падали с 1–4 м.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
 #include "core/math.h"
 #include "ecs/registry.h"  // Entity — шов воплощения ниже
+#include "game/faction.h"  // kFactionCount — бакеты хозяина земли (RoomRecord::owner)
 #include "game/npc_pool.h" // NpcId
 #include "game/room.h"     // kRoomBinEdge — из него выведен предел поиска
 #include "world/level_stack.h" // LayerId
 
 namespace giga {
+class MacroGrid;
 class World;
+enum class GravityRegime : std::uint8_t;
 }
 
 namespace giga::game {
@@ -55,6 +59,31 @@ namespace giga::game {
 bool stand_point_in_cell(const World& world, vec3 half, int cx, int cy, int cz,
                          vec3& centreOut);
 
+// Есть ли боковой выход из клетки по касательной плоскости фрейма гравитации
+// с гранным клиренсом >= kBodyClearanceSub (отсекает запертые 1x1 карманы).
+bool cell_has_exit_clearance(const MacroGrid& grid, GravityRegime regime,
+                             int cx, int cy, int cz);
+
+// Быстрая проверка опоры + высоты стояния + бокового выхода по `MacroGrid`
+// для наводки `place_errand_step` (без полного `World`).
+bool cell_standable_on_grid(const MacroGrid& grid, GravityRegime regime,
+                            int cx, int cy, int cz);
+
+// Пригодность клетки как слота стояния: 0 = нельзя/заперто/щель < 16 колонок,
+// 1 = проходит `stand_point_in_cell` + выход >= 4 + >= 16 колонок под ногой,
+// 2 = сверх того чистый `floor_standable` и несущий материал (`anchor_alive`).
+int cell_stand_slot_eval(const World& world, vec3 half, int cx, int cy, int cz,
+                         SubVoxelAnchor& anchorOut, vec3& centreOut);
+
+// Запечь `fr.boxAnchors` по фактической геометрии `world` при входе на этаж.
+void rooms_bake_anchors(FloorRooms& fr, const World& world);
+
+// Перевычислить опорный якорь одного бокса (при бейке или после карва опоры).
+bool room_box_pick_anchor(const FloorRooms& fr, const World& world, RoomId id,
+                          std::size_t boxIndex, RoomTargetAnchor& out);
+
+inline constexpr std::uint16_t kNoFaction = 0xFFFFu;
+
 // СКОЛЬКО КЛЕТОК ТЕЛО ПЕРЕБИРАЕТ, ПРЕЖДЕ ЧЕМ ПРИЗНАТЬ, ЧТО ЖИТЬ НЕГДЕ.
 // Вывод, а не назначение: это объём одного бина зон (ребро 8 клеток = 16 м,
 // [room.h] kRoomBinEdge) — той же ступени, которой выбор цели меряет «рядом».
@@ -66,6 +95,12 @@ inline constexpr std::uint32_t kSettleProbeCells =
 
 // СОСТОЯНИЕ ОДНОГО ПРИХОДА НА ЭТАЖ. Живёт, пока идёт расселение, и ничего не
 // переживает: ни сейва, ни следующего входа.
+struct FactionSpan {
+    std::vector<std::uint32_t> boxIdx;  // индексы в rooms->boxes
+    std::vector<std::uint32_t> cellEnd; // префикс объёмов внутри бакета
+    std::uint32_t total = 0;            // суммарное число клеток в бакете
+};
+
 struct Settlement {
     const World* world = nullptr;
     const FloorRooms* rooms = nullptr;
@@ -73,12 +108,20 @@ struct Settlement {
     // объявления; `boxEnd[b]` — сколько клеток в боксах 0..b. Плоско и без
     // куч на зону: место = число, зона места = двоичный поиск.
     std::vector<std::uint32_t> boxEnd;
+    // Индекс по хозяину земли (`0` = нейтральные `owner == 0`, `1..kFactionCount`
+    // = фракция `f = owner - 1`).
+    std::array<FactionSpan, kFactionCount + 1> byOwner;
     std::uint32_t total = 0; // размер пространства; 0 зон → весь тор
     std::vector<std::uint64_t> taken; // бит на макроклетку: место занято телом
     // Счёт вслух (S11).
-    std::uint32_t settled = 0;  // мест выдано
-    std::uint32_t homeless = 0; // отказов: предел поиска исчерпан
-    std::uint32_t probes = 0;   // клеток перебрано всего
+    std::uint32_t settled = 0;               // мест выдано
+    std::uint32_t homeless = 0;              // отказов: предел поиска исчерпан
+    std::uint32_t probes = 0;                // клеток перебрано всего
+    std::uint32_t settledOwnOwner = 0;       // селилось на землю своей фракции
+    std::uint32_t settledNeutral = 0;        // на нейтральную землю (owner==0) или без зон
+    std::uint32_t settledOtherOwner = 0;     // вынужденный фолбек на чужую землю
+    std::uint32_t settledFloorStandable = 0; // прошло строгий floor_standable
+    std::uint32_t settledSubSupport = 0;     // подтверждён >=16-колонный якорь + выход
 };
 
 // Подготовить расселение по зонам `rooms` на геометрии `world`. Пустой список
@@ -95,6 +138,10 @@ void settle_begin(Settlement& s, const World& world, const FloorRooms& rooms);
 // Порядок вызовов значим только при споре за одну клетку, поэтому зовущий
 // обязан идти в порядке, не зависящем от случая (жители — по возрастанию id).
 bool settle_spot(Settlement& s, std::uint32_t key, vec3 half, vec3& centreOut);
+
+// Вариант с приоритетом хозяина земли (`faction == kNoFaction` -> общий поиск).
+bool settle_spot(Settlement& s, std::uint32_t key, vec3 half,
+                 std::uint16_t faction, vec3& centreOut);
 
 // ШОВ ВОПЛОЩЕНИЯ ЖИТЕЛЯ — ОДНА СТРОКА НА ВСЕХ ЗОВУЩИХ: место у доселения, по
 // ключу из номера записи и сида этажа, и только потом тело (`embody` либо

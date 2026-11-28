@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "game/verb_table.h" // kVerbCount — K из verbs.csv, не литерал
+#include "world/anchor.h"    // SubVoxelAnchor — субвоксельный якорь цели бокса
 #include "world/types.h"     // kMacroDim — бины комнат той же сетки, что roomAt
 
 namespace giga::game {
@@ -153,6 +154,16 @@ inline std::uint32_t room_capacity(const RoomFeature& f) noexcept {
     return room_capacity(f.cells);
 }
 
+// Опорная цель одного RoomBox (Инкремент D): O(1)-чтение для `place_target_cell`
+// вместо слепого центра бокса, не знавшего колонн, дыр в полу и гравитации.
+struct RoomTargetAnchor {
+    SubVoxelAnchor support{}; // субвоксельный якорь опоры под клеткой цели
+    std::uint8_t cx = 0;      // клетка стояния (0..127), внутри комнаты
+    std::uint8_t cy = 0;
+    std::uint8_t cz = 0;
+    std::uint8_t valid = 0;   // 1 = опора + боковой выход подтверждены
+};
+
 // Комнаты одного этажа: плотные SoA-таблицы фич (16 Б) и мутируемого состояния
 // (8 Б) + пулы объявленных профилей и разреженных запасов + плоский roomAt.
 // Пересоздаётся на каждом входе (закон 2) — в снимок этажа не едет.
@@ -160,6 +171,9 @@ struct FloorRooms {
     std::vector<RoomFeature> features; // неизменяемые фичи этажа; RoomId = индекс + 1
     std::vector<RoomRecord> records;   // горячее изменяемое состояние комнат
     std::vector<RoomBox> boxes;        // композиции всех комнат, подряд
+    // Опорные цели параллельно `boxes` (`boxAnchors.size() == boxes.size()`
+    // после `rooms_bake_anchors`, пусто до запекания по геометрии).
+    std::vector<RoomTargetAnchor> boxAnchors;
     std::vector<std::array<std::int16_t, kVerbCount>> declaredArchetypes;
     std::vector<std::array<std::int32_t, kVerbCount>> supplies;
     std::vector<RoomId> roomAt;  // kMacroDim^3, u16; пуст до rooms_reset
