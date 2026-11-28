@@ -74,32 +74,41 @@ static void check_budget(const char* name, double measured, double limit,
 //     с запасом на степень графа и двухуровневую таблицу, в 10 раз строже
 //     прежнего потолка 512 МиБ).
 static void nav_footprint_is_measured_on_a_real_floor() {
+    static constexpr FloorKind kKinds[] = {
+        FloorKind::Residential,
+        FloorKind::Commercial,
+        FloorKind::Industrial,
+        FloorKind::Derelict,
+        FloorKind::Khrushi,
+    };
     World w;
-    generate_floor(w, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
-    FloorRooms fr;
-    rooms_declare(fr, /*number=*/0, floor_spec(FloorKind::Residential), 1337u);
     ClearanceField oracle;
-    oracle.build(w.grid());
-    ZoneNav zn;
-    bake_zone_nav(fr, oracle, kBodyClearanceSub, w.gravity().regime, zn,
-                  /*threads=*/0);
-    CHECK(zn.built());
+    for (FloorKind kind : kKinds) {
+        const FloorSpec spec = floor_spec(kind);
+        generate_floor(w, /*number=*/0, spec, 1337u);
+        FloorRooms fr;
+        rooms_declare(fr, /*number=*/0, spec, 1337u);
+        oracle.build(w.grid());
+        ZoneNav zn;
+        bake_zone_nav(fr, oracle, kBodyClearanceSub, w.gravity().regime, zn,
+                      /*threads=*/0);
+        CHECK(zn.built());
+        CHECK(zn.flow.planes <= kZoneFlowMaxPlanes);
 
-    check_budget("zone_dist_bytes", static_cast<double>(zn.dist.bytes()),
-                 2.0 * 1024.0 * 1024.0, "B");
-    check_budget("zone_nav_total_bytes", static_cast<double>(zn.bytes()),
-                 48.0 * 1024.0 * 1024.0, "B");
-    // Разбивка по клеткам — единственное слагаемое, которое ОСТАЛОСЬ
-    // арифметикой: один RoomId на макроклетку, 2 097 152 × 2 Б = 4 МиБ ровно.
-    // Его и пиним равенством, как пинилась формула полей потока.
-    CHECK(zn.part.at.size() == kMacroCells);
-    // И вслух — сколько зон и секторов дал этаж: без этого числа
-    // «таблица выросла» нельзя отличить от «этаж нарезан мельче».
-    std::fprintf(stderr,
-                 "[budget] zone_nav zones=%u sectors=%u table=%.2f MiB flow=%.1f MiB\n",
-                 zn.part.zones, zn.dist.sectors,
-                 static_cast<double>(zn.dist.bytes()) / (1024.0 * 1024.0),
-                 static_cast<double>(zn.flow.bytes()) / (1024.0 * 1024.0));
+        check_budget("zone_dist_bytes", static_cast<double>(zn.dist.bytes()),
+                     2.0 * 1024.0 * 1024.0, "B");
+        check_budget("zone_nav_total_bytes", static_cast<double>(zn.bytes()),
+                     48.0 * 1024.0 * 1024.0, "B");
+        CHECK(zn.part.at.size() == kMacroCells);
+        std::fprintf(stderr,
+                     "[budget] zone_nav kind=%d zones=%u sectors=%u maxDeg=%u planes=%u "
+                     "table=%.2f MiB flow=%.2f MiB total=%.2f MiB\n",
+                     static_cast<int>(kind), zn.part.zones, zn.dist.sectors,
+                     zn.flow.maxDegree, zn.flow.planes,
+                     static_cast<double>(zn.dist.bytes()) / (1024.0 * 1024.0),
+                     static_cast<double>(zn.flow.bytes()) / (1024.0 * 1024.0),
+                     static_cast<double>(zn.bytes()) / (1024.0 * 1024.0));
+    }
 }
 
 // --- 2. Room zones: the bake that just grew ---------------------------------

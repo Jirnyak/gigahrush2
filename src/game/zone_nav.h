@@ -30,6 +30,7 @@
 // ([world/clearance.h] `face_clearance`, габарит в субвокселях).
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -308,15 +309,57 @@ int zone_nbr_slot(const ZoneGraph& g, RoomId zone, RoomId nbr);
 // сторону выходить». Правило, которого можно не писать, — лучшее правило.
 inline constexpr std::uint8_t kZoneFlowNone = 0xFFu; // не моя зона / не достигнута
 
+// Жёсткий потолок плоских глобальных плоскостей `ZoneFlow::dir`:
+// 16 * 2 MiB = 32 MiB. Оставляет >= 10 MiB в 48-MiB бюджете `ZoneNav` под
+// `ZonePartition` (4 MiB), `ZoneDist` (<= 2 MiB) и `ZoneGraph`, а любая зона со
+// степенью > 16 кладёт хвост рёбер в компактное per-zone overflow-хранилище
+// без потери достижимости (matwej.md §4 дыра 7).
+inline constexpr std::uint32_t kZoneFlowMaxPlanes = 16u;
+
 struct ZoneFlow {
-    std::uint32_t planes = 0;      // = макс. степень зоны
+    std::uint32_t planes = 0;      // min(maxDegree, kZoneFlowMaxPlanes)
+    std::uint32_t maxDegree = 0;   // истинная максимальная степень зоны в графе
     std::vector<std::uint8_t> dir; // planes × kMacroCells
+
+    // Компактный overflow для слотов >= planes (пуст, если maxDegree <= kZoneFlowMaxPlanes).
+    // Отсортированный индекс клеток хаб-зон -> (индекс overflow-зоны, локальный индекс в ней).
+    std::vector<std::uint32_t> overflowCellCi;
+    std::vector<std::uint32_t> overflowCellZoneIdx;
+    std::vector<std::uint32_t> overflowCellLocal;
+    std::vector<std::uint32_t> overflowZoneDirBase;
+    std::vector<std::uint32_t> overflowZoneCells;
+    std::vector<std::uint32_t> overflowZoneExtra;
+    std::vector<std::uint8_t> overflowDir;
 
     bool built() const { return planes != 0 && !dir.empty(); }
     std::uint8_t at(int slot, std::size_t cell) const {
-        return dir[static_cast<std::size_t>(slot) * kMacroCells + cell];
+        if (slot < 0 || cell >= kMacroCells) return kZoneFlowNone;
+        const std::uint32_t uslot = static_cast<std::uint32_t>(slot);
+        if (uslot < planes)
+            return dir[static_cast<std::size_t>(uslot) * kMacroCells + cell];
+        if (overflowCellCi.empty()) return kZoneFlowNone;
+        const std::uint32_t ci = static_cast<std::uint32_t>(cell);
+        auto it = std::lower_bound(overflowCellCi.begin(), overflowCellCi.end(), ci);
+        if (it == overflowCellCi.end() || *it != ci) return kZoneFlowNone;
+        const std::size_t idx = static_cast<std::size_t>(it - overflowCellCi.begin());
+        const std::uint32_t zIdx = overflowCellZoneIdx[idx];
+        const std::uint32_t extra = uslot - planes;
+        if (extra >= overflowZoneExtra[zIdx]) return kZoneFlowNone;
+        const std::size_t base = overflowZoneDirBase[zIdx];
+        const std::size_t stride = overflowZoneCells[zIdx];
+        return overflowDir[base + static_cast<std::size_t>(extra) * stride +
+                           overflowCellLocal[idx]];
     }
-    std::size_t bytes() const { return dir.size(); }
+    std::size_t bytes() const {
+        return dir.size() +
+               overflowCellCi.size() * sizeof(std::uint32_t) +
+               overflowCellZoneIdx.size() * sizeof(std::uint32_t) +
+               overflowCellLocal.size() * sizeof(std::uint32_t) +
+               overflowZoneDirBase.size() * sizeof(std::uint32_t) +
+               overflowZoneCells.size() * sizeof(std::uint32_t) +
+               overflowZoneExtra.size() * sizeof(std::uint32_t) +
+               overflowDir.size();
+    }
 };
 
 // Бейк полей. Бейк-таймовый; детерминирован (FIFO, фиксированный порядок

@@ -79,12 +79,10 @@ FloorAwakenStats floor_awaken(World& w);
 //                         клетка и он не лежит в свободном списке. Это течь
 //                         второго рода: слот потерян до перезагрузки этажа.
 //
-// Считается по полю материалов (kSubMaterialName) — тому, которым живёт
-// мир-автомат. Поле пятен ([world/stain.h]) сегодня течёт своим способом
-// (ensure_page без парного освобождения, ни drop_page, ни collapse нигде) и
-// ПОД АУДИТ НЕ ВЗЯТО СОЗНАТЕЛЬНО: включать его сюда значило бы завести гейт,
-// красный с первой минуты, и он был бы немедленно выключен. Долг записан
-// отдельно.
+// Считается по полю материалов (kSubMaterialName) И по полю пятен
+// (kStainFieldName, matwej.md §8.7): для пятен нарушением считается полностью
+// нулевая ({0,0,0}) страница в пуле или потерянный/делёный слот (однородно
+// окрашенная ненулевым цветом страница законна, т.к. у World нет базового цвета).
 struct PageAuditStats {
     std::size_t paged_cells = 0;   // клеток, у которых есть страница
     std::size_t pages_in_use = 0;  // слотов занято по учёту пула
@@ -96,8 +94,16 @@ struct PageAuditStats {
     std::size_t uniform_paged = 0; // НАРУШЕНИЕ: страница при однородной клетке
     std::size_t orphan_slots = 0;  // НАРУШЕНИЕ: слот занят, клетки на него нет
 
+    std::size_t stain_paged_cells = 0;
+    std::size_t stain_pages_in_use = 0;
+    std::size_t stain_page_slots = 0;
+    std::size_t stain_uniform_paged = 0; // НАРУШЕНИЕ: полностью {0,0,0} страница пятен
+    std::size_t stain_orphan_slots = 0;  // НАРУШЕНИЕ: потерянный/делёный слот StainRGB
+
     // Одно число для CHECK'а — сумма нарушений. Ноль на честном дереве.
-    std::size_t violations() const { return uniform_paged + orphan_slots; }
+    std::size_t violations() const {
+        return uniform_paged + orphan_slots + stain_uniform_paged + stain_orphan_slots;
+    }
 };
 
 PageAuditStats audit_sub_pages(const World& w);

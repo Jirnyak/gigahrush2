@@ -661,7 +661,9 @@ static void test_carve_clears_stain() {
     CarveResult res;
     CHECK(carve_at(w, 75, 75, 75, 4, 4, 7, /*power*/60000, /*seed*/3,
                    scratch, res));
-    CHECK(sf->page(ci)[bit] == StainRGB{});
+    // Последнее пятно клетки вырезано -> нулевая страница сразу сдана обратно в пул.
+    CHECK(!sf->paged(ci));
+    CHECK(sf->at(ci, bit, StainRGB{}) == StainRGB{});
 }
 
 // Кросс-пин двух словарей направлений (S20.7): nav-порядок инвертирован по

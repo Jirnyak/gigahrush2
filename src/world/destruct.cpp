@@ -128,7 +128,11 @@ inline bool remove_key(World& w, SubField<CellType>* mats,
     // Краска живёт только на материи: стейн вырезанного атома чистится
     // вместе с ним (раньше висел на несуществующем атоме до опустошения
     // клетки — мелкий долг S20.7).
-    if (stains && stains->paged(ci)) stains->page(ci)[key & 511u] = StainRGB{};
+    if (stains && stains->paged(ci)) {
+        StainRGB* sp = stains->page(ci);
+        sp[key & 511u] = StainRGB{};
+        if (sp[0] == StainRGB{}) stains->collapse_if_uniform(ci, nullptr);
+    }
     return true;
 }
 

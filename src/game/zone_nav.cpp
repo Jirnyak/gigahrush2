@@ -869,13 +869,15 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
     if (!part.built() || !g.built()) return;
     const std::uint32_t Z = g.zones;
 
-    // Плоскостей — ровно максимальная степень зоны. Не кап и не вкус: k-е поля
-    // всех зон не пересекаются по клеткам (каждое обрезано своей зоной),
-    // поэтому плоскостей нужно столько, сколько соседок у самой связной зоны.
-    std::uint32_t planes = 0;
+    // Плоскостей — ровно максимальная степень зоны (ограничена сверху
+    // kZoneFlowMaxPlanes = 16); хвост сверх капа уходит в per-zone overflow.
+    std::uint32_t maxDeg = 0;
     for (std::uint32_t z = 0; z < Z; ++z)
-        if (g.degree(z) > planes) planes = g.degree(z);
-    if (planes == 0) return; // граф без рёбер — вести некуда
+        if (g.degree(z) > maxDeg) maxDeg = g.degree(z);
+    if (maxDeg == 0) return; // граф без рёбер — вести некуда
+    const std::uint32_t planes =
+        maxDeg > kZoneFlowMaxPlanes ? kZoneFlowMaxPlanes : maxDeg;
+    out.maxDegree = maxDeg;
     out.planes = planes;
     out.dir.assign(static_cast<std::size_t>(planes) * kMacroCells, kZoneFlowNone);
 
@@ -893,6 +895,52 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                 cellsOf[cur[part.at[i] - 1]++] = static_cast<std::uint32_t>(i);
     }
 
+    // Если есть зоны со степенью > planes, готовим компактный per-zone overflow
+    // и временную O(1)-карту cell -> localIdx в своей зоне.
+    std::vector<std::uint32_t> zoneToOverflow;
+    std::vector<std::uint32_t> cellLocal;
+    if (maxDeg > planes) {
+        zoneToOverflow.assign(Z, UINT32_MAX);
+        cellLocal.assign(kMacroCells, UINT32_MAX);
+        struct OvCell {
+            std::uint32_t ci;
+            std::uint32_t zIdx;
+            std::uint32_t local;
+        };
+        std::vector<OvCell> ovCells;
+        std::size_t totalDir = 0;
+        for (std::uint32_t z = 0; z < Z; ++z) {
+            const std::uint32_t deg = g.degree(z);
+            if (deg <= planes) continue;
+            const std::uint32_t zCells = cellOff[z + 1] - cellOff[z];
+            if (zCells == 0) continue;
+            const std::uint32_t zIdx =
+                static_cast<std::uint32_t>(out.overflowZoneDirBase.size());
+            zoneToOverflow[z] = zIdx;
+            out.overflowZoneDirBase.push_back(static_cast<std::uint32_t>(totalDir));
+            out.overflowZoneCells.push_back(zCells);
+            out.overflowZoneExtra.push_back(deg - planes);
+            totalDir += static_cast<std::size_t>(deg - planes) * zCells;
+            for (std::uint32_t ci = cellOff[z]; ci < cellOff[z + 1]; ++ci) {
+                const std::uint32_t local = ci - cellOff[z];
+                const std::uint32_t cell = cellsOf[ci];
+                cellLocal[cell] = local;
+                ovCells.push_back({cell, zIdx, local});
+            }
+        }
+        out.overflowDir.assign(totalDir, kZoneFlowNone);
+        std::sort(ovCells.begin(), ovCells.end(),
+                  [](const OvCell& a, const OvCell& b) { return a.ci < b.ci; });
+        out.overflowCellCi.reserve(ovCells.size());
+        out.overflowCellZoneIdx.reserve(ovCells.size());
+        out.overflowCellLocal.reserve(ovCells.size());
+        for (const OvCell& e : ovCells) {
+            out.overflowCellCi.push_back(e.ci);
+            out.overflowCellZoneIdx.push_back(e.zIdx);
+            out.overflowCellLocal.push_back(e.local);
+        }
+    }
+
     const int W = kMacroDim;
     std::vector<std::uint32_t> q, next;
     q.reserve(1u << 12);
@@ -902,7 +950,16 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
         const std::uint32_t deg = g.degree(z);
         for (std::uint32_t k = 0; k < deg; ++k) {
             const RoomId target = g.nbr[g.offset[z] + k];
-            std::uint8_t* plane = out.dir.data() + static_cast<std::size_t>(k) * kMacroCells;
+            const bool isOv = k >= planes;
+            if (isOv && zoneToOverflow[z] == UINT32_MAX) continue;
+            std::uint8_t* plane = nullptr;
+            if (!isOv) {
+                plane = out.dir.data() + static_cast<std::size_t>(k) * kMacroCells;
+            } else {
+                const std::uint32_t zIdx = zoneToOverflow[z];
+                plane = out.overflowDir.data() + out.overflowZoneDirBase[zIdx] +
+                        static_cast<std::size_t>(k - planes) * out.overflowZoneCells[zIdx];
+            }
             q.clear();
             next.clear();
             // СЕМЕНА — ВСЯ ГРАНИЦА: свои клетки, у которых есть проходимый
@@ -925,7 +982,7 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                     if (cl < size) continue;
                     // Направление ПЕРЕХОДА, а не отметка: из этой клетки шаг `d`
                     // уже выводит в целевую зону.
-                    plane[c] = static_cast<std::uint8_t>(d);
+                    plane[isOv ? cellLocal[c] : c] = static_cast<std::uint8_t>(d);
                     // Семя ложится в слой по СВОЕЙ цене: опёртое — в текущий,
                     // висящее — в следующий. Иначе лексикографический порядок
                     // сломался бы на первом же шаге.
@@ -952,11 +1009,12 @@ void bake_zone_flow(const ZonePartition& part, const ZoneGraph& g,
                         const int nz = wrap_macro(cz + nav::kNavDir[d][2]);
                         const std::size_t ni = macro_index(nx, ny, nz);
                         if (part.at[ni] != mine) continue;       // ОБРЕЗКА ЗОНОЙ
-                        if (plane[ni] != kZoneFlowNone) continue; // уже достигнута
+                        const std::size_t writeIdx = isOv ? cellLocal[ni] : ni;
+                        if (plane[writeIdx] != kZoneFlowNone) continue; // уже достигнута
                         if (oracle.at(cx, cy, cz, d) < size) continue;
                         // Шли c -> ni в направлении d, значит из ni обратно ведёт
                         // (d ^ 1) — тот же закон обратного шага, что у нава.
-                        plane[ni] = static_cast<std::uint8_t>(d ^ 1);
+                        plane[writeIdx] = static_cast<std::uint8_t>(d ^ 1);
                         // ЦЕНА РЕШАЕТ СЛОЙ: опёртая клетка дописывается в ТЕКУЩУЮ
                         // очередь (значит внутри слоя порядок по длине — FIFO), а
                         // висящая откладывается в следующий. Это и есть
@@ -1108,9 +1166,10 @@ std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,
                            int cx, int cy, int cz, int gravityAxis) {
     if (!zn.built() || myZone == kNoRoom || target == kNoRoom) return kZoneFlowNone;
     if (myZone == target) return kZoneFlowNone; // уже на месте — шага нет
-    const RoomId nextZone = zone_next(zn.graph, zn.dist, myZone, target);
+    RoomId curZone = myZone;
+    RoomId nextZone = zone_next(zn.graph, zn.dist, curZone, target);
     if (nextZone == kNoRoom) return kZoneFlowNone; // другая компонента
-    const int slot = zone_nbr_slot(zn.graph, myZone, nextZone);
+    int slot = zone_nbr_slot(zn.graph, curZone, nextZone);
     if (slot < 0) return kZoneFlowNone;
 
     int x = wrap_macro(cx), y = wrap_macro(cy), z = wrap_macro(cz);
@@ -1123,7 +1182,18 @@ std::uint8_t zone_walk_dir(const ZoneNav& zn, RoomId myZone, RoomId target,
         x = wrap_macro(x + nav::kNavDir[d][0]);
         y = wrap_macro(y + nav::kNavDir[d][1]);
         z = wrap_macro(z + nav::kNavDir[d][2]);
-        if (zn.part.cell(x, y, z) != myZone) return d; // ступенька и есть выход
+        const RoomId steppedZone = zn.part.cell(x, y, z);
+        if (steppedZone != curZone) {
+            if (steppedZone == target || steppedZone == kNoRoom) return d;
+            // Транзитный переход между зонами по вертикали (лестница / Khrushi
+            // kStoreyRise=12): перешагиваем границу внутри lookahead и берём
+            // первый горизонтальный шаг уже в следующей зоне маршрута.
+            curZone = steppedZone;
+            nextZone = zone_next(zn.graph, zn.dist, curZone, target);
+            if (nextZone == kNoRoom) return d;
+            slot = zone_nbr_slot(zn.graph, curZone, nextZone);
+            if (slot < 0) return d;
+        }
     }
     return kZoneFlowNone;
 }

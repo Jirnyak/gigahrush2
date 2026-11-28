@@ -844,6 +844,153 @@ void synthetic_cycles_and_components() {
     CHECK(failed == 0);
 }
 
+// Дыра №7 (кап плоскостей ZoneFlow + overflow-достижимость), Дыра №6 (ступенька на
+// выходе из зоны через границу между этажами) и матрица связности всех FloorKind
+// после PadicTheme 6331faa (matwej.md §4 дыры 5, 6, 7; §11.4.5).
+void overflow_stepup_and_floor_matrix() {
+    {
+        ZoneNav zn;
+        World airWorld;
+        ClearanceField airOracle;
+        airOracle.build(airWorld.grid());
+        zn.part.at.assign(kMacroCells, kNoRoom);
+        zn.part.zones = 25u;
+        for (int i = 0; i < 24; ++i) {
+            zn.part.at[macro_index(10 + i, 10, 10)] = 1u;
+            zn.part.at[macro_index(10 + i, 11, 10)] = static_cast<RoomId>(2 + i);
+        }
+        bake_zone_graph(zn.part, airOracle, kBodyClearanceSub, zn.graph);
+        CHECK(zn.graph.degree(0) == 24u);
+        bake_zone_dist(zn.graph, zn.dist, /*threads=*/0);
+        bake_zone_flow(zn.part, zn.graph, airOracle, kBodyClearanceSub,
+                       GravityRegime::NegZ, zn.flow);
+        CHECK(zn.flow.maxDegree == 24u);
+        CHECK(zn.flow.planes == kZoneFlowMaxPlanes);
+        CHECK(zn.flow.bytes() < 34u * 1024u * 1024u);
+        for (int i = 0; i < 24; ++i) {
+            const RoomId target = static_cast<RoomId>(2 + i);
+            int cx = 10, cy = 10, cz = 10;
+            bool reached = false;
+            for (int step = 0; step < 32; ++step) {
+                const RoomId myZone = zn.part.cell(cx, cy, cz);
+                if (myZone == kNoRoom) break;
+                const std::uint8_t d =
+                    zone_walk_dir(zn, myZone, target, cx, cy, cz, 2);
+                if (d == kZoneFlowNone) break;
+                cx = wrap_macro(cx + nav::kNavDir[d][0]);
+                cy = wrap_macro(cy + nav::kNavDir[d][1]);
+                cz = wrap_macro(cz + nav::kNavDir[d][2]);
+                if (zn.part.cell(cx, cy, cz) == target) {
+                    reached = true;
+                    break;
+                }
+            }
+            CHECK(reached);
+        }
+    }
+
+    {
+        ZoneNav zn;
+        World airWorld;
+        ClearanceField airOracle;
+        airOracle.build(airWorld.grid());
+        zn.part.zones = 3u;
+        zn.part.at.assign(kMacroCells, kNoRoom);
+        zn.part.at[macro_index(20, 20, 10)] = 1u;
+        zn.part.at[macro_index(20, 20, 11)] = 2u;
+        zn.part.at[macro_index(21, 20, 11)] = 3u;
+        bake_zone_graph(zn.part, airOracle, kBodyClearanceSub, zn.graph);
+        bake_zone_dist(zn.graph, zn.dist, /*threads=*/0);
+        bake_zone_flow(zn.part, zn.graph, airOracle, kBodyClearanceSub,
+                       GravityRegime::NegZ, zn.flow);
+        CHECK(zone_walk_dir(zn, 1u, 3u, 20, 20, 10, /*gravityAxis=*/2) == 1u);
+        CHECK(zone_walk_dir(zn, 1u, 2u, 20, 20, 10, /*gravityAxis=*/2) == 5u);
+    }
+
+    static constexpr FloorKind kAllKinds[] = {
+        FloorKind::Residential,
+        FloorKind::Commercial,
+        FloorKind::Industrial,
+        FloorKind::Derelict,
+        FloorKind::Padic,
+        FloorKind::Khrushi,
+    };
+    World w;
+    ClearanceField oracle;
+    for (FloorKind kind : kAllKinds) {
+        const FloorSpec spec = floor_spec(kind);
+        generate_floor(w, /*number=*/0, spec, 1337u);
+        FloorRooms fr;
+        rooms_declare(fr, /*number=*/0, spec, 1337u);
+        oracle.build(w.grid());
+        ZoneNav zn;
+        bake_zone_nav(fr, oracle, kBodyClearanceSub, w.gravity().regime, zn,
+                      /*threads=*/0);
+        CHECK(zn.built());
+        CHECK(zn.flow.planes <= kZoneFlowMaxPlanes);
+        CHECK(zn.bytes() <= 48u * 1024u * 1024u);
+        CHECK(zn.dist.bytes() <= 2u * 1024u * 1024u);
+
+        const std::uint32_t Z = zn.graph.zones;
+        std::vector<std::uint8_t> vis(Z, 0u);
+        std::vector<std::uint32_t> q;
+        std::uint32_t largest = 0u;
+        std::uint32_t nonIsolated = 0u;
+        std::uint32_t components = 0u;
+        std::uint32_t c1 = 0, cSmall = 0, cMed = 0, cLarge = 0;
+        std::vector<std::uint32_t> largeComps;
+        for (std::uint32_t s = 0; s < Z; ++s) {
+            if (zn.graph.degree(s) > 0u) ++nonIsolated;
+            if (vis[s]) continue;
+            ++components;
+            vis[s] = 1u;
+            q.clear();
+            q.push_back(s);
+            int minZ = 128, maxZ = -1;
+            for (std::size_t h = 0; h < q.size(); ++h) {
+                const std::uint32_t u = q[h];
+                const auto boxes = fr.room_boxes(static_cast<RoomId>(u + 1u));
+                if (!boxes.empty()) {
+                    if (boxes[0].z < minZ) minZ = boxes[0].z;
+                    if (boxes[0].z > maxZ) maxZ = boxes[0].z;
+                }
+                const std::uint32_t b = zn.graph.offset[u];
+                const std::uint32_t e = zn.graph.offset[u + 1];
+                for (std::uint32_t ei = b; ei < e; ++ei) {
+                    const std::uint32_t v =
+                        static_cast<std::uint32_t>(zn.graph.nbr[ei]) - 1u;
+                    if (!vis[v]) {
+                        vis[v] = 1u;
+                        q.push_back(v);
+                    }
+                }
+            }
+            const std::uint32_t csz = static_cast<std::uint32_t>(q.size());
+            if (csz <= 1u) ++c1;
+            else if (csz <= 16u) ++cSmall;
+            else if (csz <= 100u) ++cMed;
+            else {
+                ++cLarge;
+                if (kind == FloorKind::Residential && largeComps.size() < 6u) {
+                    largeComps.push_back(csz);
+                    std::fprintf(stderr, "  [large-comp] size=%u z=[%d..%d] firstZone=%u\n",
+                                 csz, minZ, maxZ, s + 1u);
+                }
+            }
+            if (csz > largest) largest = csz;
+        }
+        std::fprintf(stderr,
+                     "[zone-nav-matrix] kind=%d zones=%u nonIso=%u comp=%u (1:%u,<=16:%u,<=100:%u,>100:%u) "
+                     "largest=%u maxDeg=%u flowMiB=%.2f totalMiB=%.2f\n",
+                     static_cast<int>(kind), Z, nonIsolated, components, c1, cSmall, cMed, cLarge,
+                     largest, zn.flow.maxDegree,
+                     static_cast<double>(zn.flow.bytes()) / (1024.0 * 1024.0),
+                     static_cast<double>(zn.bytes()) / (1024.0 * 1024.0));
+        CHECK(nonIsolated > 0u);
+        CHECK(largest >= 500u);
+    }
+}
+
 } // namespace zonenav_test
 
 void test_zonenav_all() {
@@ -955,4 +1102,5 @@ void test_zonenav_all() {
     zonenav_test::weight_prefers_support_and_gravity_is_only_price(w, part, gAfter, oracle);
     zonenav_test::degenerate_inputs_answer(w, oracle);
     zonenav_test::synthetic_cycles_and_components();
+    zonenav_test::overflow_stepup_and_floor_matrix();
 }

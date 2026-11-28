@@ -20,6 +20,7 @@ FloorAwakenStats floor_awaken(World& w) {
 
     SubField<CellType>& mats =
         w.subfields().get_or_create<CellType>(kSubMaterialName);
+    SubField<StainRGB>* stains = w.subfields().find<StainRGB>(kStainFieldName);
     // Поля создаём ДО параллели: get_or_create трогает реестр полей, и делать
     // это из воркеров значило бы гонку на самом реестре.
     std::uint32_t* lvl = medium_level_field(w).data().data();
@@ -33,11 +34,20 @@ FloorAwakenStats floor_awaken(World& w) {
     static_assert(kMacroCells % 64 == 0, "срез z не делит слово");
     std::vector<std::uint64_t> uniformBits(kMacroCells / 64, 0ull);
     std::uint64_t* ub = uniformBits.data();
+    std::vector<std::uint64_t> stainZeroBits(
+        stains ? (kMacroCells / 64) : 0u, 0ull);
+    std::uint64_t* szb = stainZeroBits.empty() ? nullptr : stainZeroBits.data();
 
     constexpr int kSlice = kMacroDim * kMacroDim;
     parallel_for(kMacroDim, [&](int z) {
         const std::size_t lo = static_cast<std::size_t>(z) * kSlice;
         for (std::size_t ci = lo; ci < lo + kSlice; ++ci) {
+            if (stains) {
+                const StainRGB* sp = stains->page(ci);
+                if (sp && *sp == StainRGB{} &&
+                    SubField<StainRGB>::is_page_uniform(sp))
+                    szb[ci >> 6] |= 1ull << (ci & 63u);
+            }
             const CellType* pg = mats.page(ci);
             if (!pg) {
                 const MediumDigest d = medium_digest_uniform(types[ci], masks[ci]);
@@ -69,6 +79,17 @@ FloorAwakenStats floor_awaken(World& w) {
             if (settle_sub_page(w, (wi << 6) + static_cast<std::size_t>(b)))
                 ++st.settled;
         }
+    }
+    if (stains) {
+        for (std::size_t wi = 0; wi < stainZeroBits.size(); ++wi) {
+            std::uint64_t word = stainZeroBits[wi];
+            while (word) {
+                const int b = std::countr_zero(word);
+                word &= word - 1;
+                stains->drop_page((wi << 6) + static_cast<std::size_t>(b));
+            }
+        }
+        stains->compact();
     }
     // КОМПАКТ ПУЛА — сразу за схлопыванием, тем же серийным участком:
     // потребители гонят пул по page_count() (верхняя вода), а не по занятым,
@@ -232,42 +253,39 @@ PageAuditStats audit_sub_pages(const World& w) {
 
     const SubField<CellType>* mats =
         w.subfields().find<CellType>(kSubMaterialName);
-    // Поля нет — страниц нет, инвариант держится тривиально. Это НЕ повод
-    // молчать в тесте: там проверяется ещё и paged_cells, и ноль страниц на
-    // сцене, где их ждут, виден по нему.
-    if (!mats) return st;
-
-    st.pages_in_use = mats->pages_in_use();
-    st.page_slots = mats->page_count();
-
-    // Серийно и без parallel_for: обход читает только pageOf_ и по одному биту
-    // сравнения на страницу, стоит микросекунды на пустом этаже, а параллель
-    // здесь дала бы гонку на счётчиках ради выигрыша, которого нет. Аудит —
-    // путь гейта и диагностики, не кадра.
-    for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
-        const CellType* pg = mats->page(ci);
-        if (!pg) continue;
-        ++st.paged_cells;
-        // Однородна по паре (материал, бит) — тот же предикат, что у свёртки:
-        // однородная страница рыхлого с частичной маской законна (S16.10).
-        if (SubField<CellType>::is_page_uniform(pg) &&
-            uniform_mask(w.grid().masks()[ci]))
-            ++st.uniform_paged;
+    if (mats) {
+        st.pages_in_use = mats->pages_in_use();
+        st.page_slots = mats->page_count();
+        for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+            const CellType* pg = mats->page(ci);
+            if (!pg) continue;
+            ++st.paged_cells;
+            if (SubField<CellType>::is_page_uniform(pg) &&
+                uniform_mask(w.grid().masks()[ci]))
+                ++st.uniform_paged;
+        }
+        if (st.pages_in_use > st.paged_cells)
+            st.orphan_slots = st.pages_in_use - st.paged_cells;
+        else if (st.paged_cells > st.pages_in_use)
+            st.orphan_slots = st.paged_cells - st.pages_in_use;
     }
 
-    // Слот занят пулом, но ни одна клетка на него не смотрит и в свободном
-    // списке его нет. pages_in_use() == pages_.size() - free_.size(), поэтому
-    // разность с числом ссылающихся клеток и есть потерянные слоты. Знак
-    // проверяем: обратное неравенство означало бы, что две клетки делят слот —
-    // это нарушение другого рода, и его надо увидеть, а не схлопнуть в ноль
-    // беззнаковым вычитанием.
-    if (st.pages_in_use > st.paged_cells)
-        st.orphan_slots = st.pages_in_use - st.paged_cells;
-    else if (st.paged_cells > st.pages_in_use)
-        // Клеток со страницей БОЛЬШЕ, чем занято слотов — значит слот
-        // переиспользован двумя клетками. Считаем нарушением того же счёта:
-        // тест обязан покраснеть, а не увидеть ноль.
-        st.orphan_slots = st.paged_cells - st.pages_in_use;
+    const SubField<StainRGB>* stains = w.subfields().find<StainRGB>(kStainFieldName);
+    if (stains) {
+        st.stain_pages_in_use = stains->pages_in_use();
+        st.stain_page_slots = stains->page_count();
+        for (std::size_t ci = 0; ci < kMacroCells; ++ci) {
+            const StainRGB* sp = stains->page(ci);
+            if (!sp) continue;
+            ++st.stain_paged_cells;
+            if (*sp == StainRGB{} && SubField<StainRGB>::is_page_uniform(sp))
+                ++st.stain_uniform_paged;
+        }
+        if (st.stain_pages_in_use > st.stain_paged_cells)
+            st.stain_orphan_slots = st.stain_pages_in_use - st.stain_paged_cells;
+        else if (st.stain_paged_cells > st.stain_pages_in_use)
+            st.stain_orphan_slots = st.stain_paged_cells - st.stain_pages_in_use;
+    }
 
     return st;
 }
