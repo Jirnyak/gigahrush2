@@ -2800,7 +2800,13 @@ if(GIGA_BUILD_TESTS)
         #     `suite_settle.inl` (faction ownership + exit clearance across 5 FloorKinds + trap/hole gates)
         #     and `suite_place.inl` (`test_place_target_anchor_support_and_isotropy`).
         # 245435 -> 245424 (−11, откат 6331faae поверх C/D: −5 гермо-реген, −6 различение видов этажей).
-        PASS_REGULAR_EXPRESSION "game_test: 245424 checks, 0 failures")
+        # 245424 -> 245362 (−62, 2026-11-28, ИИ по решениям владельца): сняты ритм по
+        #   часам (`rhythm_bias`, suite_behaviours §19 — часы читает МОДУЛЬ данными,
+        #   CANON S15.4), `AiEnv` (глобальная фаза самосбора и тег гермо в решателе —
+        #   самосбор приходит через мир, укрытие — эффект зоны S29), фолбэк врага
+        #   сквозь стены (тесты utilai 16a–d/17a переведены на `Senses`, S25.8) и
+        #   собственный пеленг бегства (17c, вторая половина; S25 «своих движений ноль»).
+        PASS_REGULAR_EXPRESSION "game_test: 245362 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

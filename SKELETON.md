@@ -738,8 +738,8 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 
 | ранг | кто заявляет | вид цели | адрес заявки |
 |---|---|---|---|
-| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:998 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
-| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1207 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
+| `Flee` | бегство (−∇danger, затем след памяти) | `Dir` | `src/game/ai.cpp:886 «        steer_claim(reg, e, tick, SteerRank::Flee, target_dir(dir, speed));»` |
+| `Patrol` | наряд | `Zone`; `Hold` только при `NoBearing`. На `NoRoute` и `StepUp` заявки НЕТ ВОВСЕ — тело достаётся прогулке, цель остаётся | `src/game/ai.cpp:1095 «        steer_claim(reg, e, tick, SteerRank::Patrol,»` |
 | `Errand` | дело: ход к месту И деяние нужды на месте | `Zone` / `Hold` | `src/game/place.cpp:886 «                    target_zone(plan.room, kErrandSpeed));»` и `src/game/place.cpp:627 «        steer_claim(reg, e, tick, SteerRank::Errand, target_hold());»` |
 | `Chase` | погоня моба за жертвой | `Dir` / `Hold` в досягаемости | `src/game/wander.cpp:419 «                                target_dir(steer_tangent(gf, tx, ty, 0.0f), sp));»` |
 | `Walk` | прогулка + заморозка взглядом | `Zone` / `Hold` | `src/game/wander.cpp:565 «                    target_zone(wt.zone, speed));»` и `src/game/wander.cpp:438 «            steer_claim(reg, e, tick, SteerRank::Walk, target_hold());»` |
@@ -824,7 +824,7 @@ Flee`, сильнее — больше, ноль есть «заявки нет�
 
 | что | мера | следствие |
 |---|---|---|
-| `rhythm` (суточный ритм, S24) | `src/game/ai.cpp:257 «        return rhythm_bias(intent, p.minuteOfDay);»`; часы `watch_minute_of_day@src/game/ai.h` | суточный ритм жив при передаче `AiEnv` из `src/app/main.cpp` (по умолчанию без часов `minuteOfDay = -1` даёт 0 для изоляции тестов) |
+| `rhythm` в восьми формулах | `src/game/ai.cpp:200 «    const float rhythm = 0.0f;»`; `grep -rn minuteOfDay src/` → **1**, объявление в `Perception` | суточного ритма в общем решателе НЕТ по закону: часы читает МОДУЛЬ своими данными поверх одного времени (CANON S15.4, владелец 2026-11-28); распорядок литералами волны Матвея (`rhythm_bias`) снят |
 | `p.armed` | `grep -rn '\.armed' src/` → 3: два чтения в формулах + объявление `bool armed = false`. **Писателя нет** | `IntentCombat` стартует с **−16** для всей толпы, хотя `ai_equip_step@src/game/ai.h` выдаёт телам оружие. Поле не связано с `Equipped` ни одной строкой |
 | `p.factionAssaultTarget` | писателя нет | `IntentFactionAssault` не может выиграть argmax **никогда** |
 
@@ -923,7 +923,7 @@ S12.3». **Решение владельца 2026-10-01: склейка есть
 |---|---|---|
 | дверь O(1)-запроса навигации | `zone_walk_dir@src/game/zone_nav.h` — два чтения: таблица даёт соседку, плоскость соседки даёт направление | **ПРАВДА** |
 | вызовов `zone_walk_dir` в проде | **1 с 2026-11-09**: `src/game/guide.cpp:53 «        zone_walk_dir(zones, from, target, cx, cy, cz, gf.pull ? gf.axis : -1);»` — внутри `steer_to_zone@src/game/guide.h`. ~~**3, и все три — проходы ходьбы**: дело, наряд, прогулка~~ Три ПОБАЙТОВО одинаковых копии «куда шагнуть к зоне» по 30 строк слиты в эту одну дверь (CANON S25) | — |
-| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:820 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1158 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
+| вызывающих `steer_to_zone` | **4, и роли у них РАЗНЫЕ**: пишет скорость только `guide_step@src/game/guide.h`; дело (`src/game/place.cpp:820 «        const SteerStep st = steer_to_zone(»`), наряд (`src/game/ai.cpp:1046 «        const SteerStep st = steer_to_zone(»`) и прогулка (`src/game/wander.cpp:490 «        const SteerStep st = steer_to_zone(»`) зовут ТУ ЖЕ дверь только чтобы спросить «исполнимо ли», и на отказе заявки не подают (CANON S25.5); с 2026-11-12 дверь несёт и сторожа края — землю `SteerGround@src/game/guide.h` и габарит тела берут все четверо | **ПРАВДА** — «заявлять только исполнимое» |
 | второй и третьей двери НЕТ | `route_step` снесён вместе с `CoarseGraph`/`FineNav` и ручной композицией двух ярусов в `src/game/ai.cpp`/`src/game/wander.cpp`; реализация решёточного бейка (nav-cpp в src/world) УДАЛЕНА целиком, в `src/world/nav.h` остался только словарь шести направлений `kNavDir@src/world/nav.h` | — |
 
 **ЧЕМ ЭТО КОНЧИЛОСЬ, ЧИСЛОМ.** Прежняя дверь отвечала «шаг к ближайшему ЯКОРЮ

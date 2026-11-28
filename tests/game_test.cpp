@@ -5453,11 +5453,10 @@ static void test_wave3a_regressions() {
         reg.emplace<Senses>(actor, sen);
         reg.destroy(mobFoe);
         reg.emplace<AiBrain>(actor);
-        const AiEnv env{};
         const Field<float>* noDanger = nullptr;
         for (std::uint64_t t = 0; t < 512; ++t)
             (void)ai_step(reg, pool, noDanger, w.grid(), 0, 0.0, 0.0f, AiConfig{},
-                          nullptr, nullptr, &w, &bus, t, env, &rel);
+                          nullptr, nullptr, &w, &bus, t);
         CHECK(reg.valid(actor));
     }
 

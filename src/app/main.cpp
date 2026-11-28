@@ -6652,11 +6652,7 @@ int main(int argc, char** argv) {
                 const auto profAiT0 = prof_now();
                 aiTick = game::ai_step(
                     reg, pool, danger, activeGrid, activeLayer, simNow, kSimDt, aiCfg,
-                    &aiMem, nullptr, &activeWorld, &bus, simTick,
-                    game::ai_env(simTick,
-                                 static_cast<game::SamosborPhase>(samosbor.phase),
-                                 &floorRooms),
-                    &factionRel);
+                    &aiMem, nullptr, &activeWorld, &bus, simTick);
                 if (steerProbeOn)
                     game::steer_probe_after(reg, game::SteerLink::Flee, steerProbe);
                 // (AGENT-GOALS ИНКРЕМЕНТ A СНЕСЁН 2026-09-30 вместе с

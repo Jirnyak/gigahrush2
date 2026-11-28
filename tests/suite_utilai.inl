@@ -2234,7 +2234,7 @@ static void test_utilai_all() {
     }
 
     // ======================================================================
-    // 16. U1.8: p.armed + FactionRelations -> IntentCombat <-> faction_feud_step.
+    // 16. U1.8: p.armed + Senses -> IntentCombat <-> faction_feud_step.
     // ======================================================================
     {
         ItemId anyGun = kInvalidItem;
@@ -2263,15 +2263,16 @@ static void test_utilai_all() {
             Entity wld = make_body(reg, pool, 31, 30, 1, Faction::Wild, wldId); // 2 m away
             pool.inventory(liqId).slots[0] = ItemSlot{anyGun, 1};
             CHECK(ai_init(reg, kLayer) == 2u);
+            // враг — из ЕДИНОГО восприятия (S25.8): сквозного поиска у решателя нет
+            reg.emplace<Senses>(liq, Senses{wld, 2.0f, 1u, 0u, 1u});
 
             AiConfig cfg;
             cfg.enabled = true;
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 1);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
-            (void)wld;
         }
 
         // 16b: Unarmed Citizen with hostile Wild nearby stays unarmed and flees (not IntentCombat).
@@ -2283,16 +2284,17 @@ static void test_utilai_all() {
             Entity cit = make_body(reg, pool, 30, 30, 1, Faction::Citizens, citId);
             Entity wld = make_body(reg, pool, 31, 30, 1, Faction::Wild, wldId);
             CHECK(ai_init(reg, kLayer) == 2u);
+            // враг — из ЕДИНОГО восприятия (S25.8): сквозного поиска у решателя нет
+            reg.emplace<Senses>(cit, Senses{wld, 2.0f, 1u, 0u, 1u});
 
             AiConfig cfg;
             cfg.enabled = true;
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 1);
             CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
             CHECK(reg.get<AiBrain>(cit).currentIntent != IntentCombat);
-            (void)wld;
         }
 
         // 16c: Strict Equipped decision: gun in bag but empty Equipped -> armed == false -> not IntentCombat.
@@ -2306,6 +2308,8 @@ static void test_utilai_all() {
             pool.inventory(liqId).slots[0] = ItemSlot{anyGun, 1};
             reg.emplace<Equipped>(liq); // empty handL/handR -> strict read says unarmed
             CHECK(ai_init(reg, kLayer) == 2u);
+            // враг — из ЕДИНОГО восприятия (S25.8): сквозного поиска у решателя нет
+            reg.emplace<Senses>(liq, Senses{wld, 2.0f, 1u, 0u, 1u});
 
             AiConfig cfg;
             cfg.enabled = true;
@@ -2313,7 +2317,7 @@ static void test_utilai_all() {
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 1);
             CHECK(reg.get<AiBrain>(liq).currentIntent != IntentCombat);
 
             // Equipping the melee weapon in handL flips p.armed -> IntentCombat.
@@ -2321,9 +2325,8 @@ static void test_utilai_all() {
             pool.inventory(liqId).slots[1] = ItemSlot{anyMelee, 1};
             CHECK(equip_item(pool.inventory(liqId), eq, 1));
             ai_step(reg, pool, &danger, grid, kLayer, 1.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 2, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 2);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
-            (void)wld;
         }
 
         // 16d: End-to-end IntentCombat <-> faction_feud_step: non-combat AiBrain suppresses feud;
@@ -2360,13 +2363,14 @@ static void test_utilai_all() {
             CHECK(suppressedHits == 0u);
             CHECK(pool.hp(wldId) == 100);
 
-            // Now run ai_step with FactionRelations: liq picks IntentCombat and lands hits.
+            // Now run ai_step: liq perceives wld (Senses) and picks IntentCombat.
+            reg.emplace<Senses>(liq, Senses{wld, 1.0f, 1u, 0u, 1u});
             AiConfig cfg;
             cfg.enabled = true;
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, open, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, open);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentCombat);
             std::uint32_t combatHits = 0;
             for (std::uint64_t t = open; t < open + 400u; ++t)
@@ -2377,7 +2381,7 @@ static void test_utilai_all() {
     }
 
     // ======================================================================
-    // 17. Perception threat power (strongerHostile) + AiEnv::rooms (inShelter).
+    // 17. Perception threat power (strongerHostile) from Senses.
     // ======================================================================
     {
         ItemId anyGun = kInvalidItem;
@@ -2394,8 +2398,6 @@ static void test_utilai_all() {
 
         MacroGrid grid;
         Field<float> danger(0.0f);
-        const FactionRelations base = kBaseFactionMatrix;
-
         // 17a: Unarmed Liquidator vs unarmed Wild at 4 m -> IntentPatrol (equal odds).
         // Arming Wild flips hostilePower > allyPower * 1.25f -> strongerHostile -> IntentFlee.
         {
@@ -2406,6 +2408,8 @@ static void test_utilai_all() {
             Entity liq = make_body(reg, pool, 30, 30, 1, Faction::Liquidators, liqId);
             Entity wld = make_body(reg, pool, 32, 30, 1, Faction::Wild, wldId); // 4 m away
             CHECK(ai_init(reg, kLayer) == 2u);
+            // враг — из ЕДИНОГО восприятия (S25.8): сквозного поиска у решателя нет
+            reg.emplace<Senses>(liq, Senses{wld, 4.0f, 1u, 0u, 1u});
 
             AiConfig cfg;
             cfg.enabled = true;
@@ -2414,21 +2418,21 @@ static void test_utilai_all() {
             cfg.rethinkSpreadSec = 0.0f;
 
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 1);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentPatrol);
 
             // Armed foe against unarmed self -> strongerHostile -> IntentFlee.
             pool.inventory(wldId).slots[0] = ItemSlot{anyGun, 1};
             ai_step(reg, pool, &danger, grid, kLayer, 1.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 2, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 2);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentFlee);
 
-            // Senses path + wounded melee self vs healthy gun foe -> strongerHostile -> IntentFlee.
+            // Wounded melee self vs healthy gun foe -> strongerHostile -> IntentFlee.
             pool.hp(liqId) = 60;
             pool.inventory(liqId).slots[0] = ItemSlot{anyMelee, 1};
-            reg.emplace<Senses>(liq, Senses{wld, 4.0f, 1u, 0u, 2u});
+            reg.get<Senses>(liq) = Senses{wld, 4.0f, 1u, 0u, 2u};
             ai_step(reg, pool, &danger, grid, kLayer, 2.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 3, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 3);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentFlee);
 
             // Dead Senses::foe is ignored safely without treating corpse as stronger hostile.
@@ -2437,76 +2441,11 @@ static void test_utilai_all() {
             reg.get<Senses>(liq).visible = 0u;
             reg.get<Senses>(liq).foeDist = -1.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 3.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 4, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 4);
             CHECK(reg.get<AiBrain>(liq).currentIntent == IntentPatrol);
         }
 
-        // 17b: AiEnv::rooms -> Perception::inShelter inside kRoomTagHermetic.
-        {
-            CHECK(AiEnv{}.rooms == nullptr);
-            FloorRooms fr;
-            rooms_reset(fr);
-            const RoomBox hermBox{10, 10, 1, 4, 4, 2};
-            const RoomBox plainBox{20, 10, 1, 4, 4, 2};
-            const RoomId hermId =
-                room_declare(fr, &hermBox, 1, kRoomTagHermetic, 0, nullptr);
-            const RoomId plainId =
-                room_declare(fr, &plainBox, 1, 0u, 0, nullptr);
-            CHECK(hermId != kNoRoom);
-            CHECK(plainId != kNoRoom);
-
-            AiEnv env;
-            env.rooms = &fr;
-            CHECK(env.rooms == &fr);
-
-            Needs calm{};
-            calm.food = kNeedMax;
-            calm.water = kNeedMax;
-            calm.sleep = kNeedMax;
-            calm.seeded = 1;
-
-            // Direct scorer proof: inShelter lowers threat pressure -> IntentSafety & IntentFlee drop.
-            Perception pOut = calm_citizen(77u);
-            pOut.samosborWarning = true;
-            pOut.fog = 0.35f;
-            Perception pIn = pOut;
-            pIn.inShelter = true;
-            float sOut[kIntentCount]{}, sIn[kIntentCount]{};
-            score_intents(pOut, calm, sOut);
-            score_intents(pIn, calm, sIn);
-            CHECK(sIn[IntentSafety] < sOut[IntentSafety]);
-            CHECK(sIn[IntentFlee] < sOut[IntentFlee]);
-
-            // End-to-end through ai_step at danger=0.20f:
-            // outside/plain room -> threat 0.20 -> IntentFlee;
-            // inside kRoomTagHermetic -> inShelter reduces threat to 0.02 -> IntentWork.
-            danger.fill(0.20f);
-            Registry reg;
-            NpcPool pool;
-            pool.init();
-            NpcId idHerm = 0, idPlain = 0, idCorr = 0;
-            Entity eHerm = make_body(reg, pool, 11, 11, 1, Faction::Citizens, idHerm);
-            Entity ePlain = make_body(reg, pool, 21, 11, 1, Faction::Citizens, idPlain);
-            Entity eCorr = make_body(reg, pool, 31, 11, 1, Faction::Citizens, idCorr);
-            pool.needs(idHerm) = calm;
-            pool.needs(idPlain) = calm;
-            pool.needs(idCorr) = calm;
-            CHECK(ai_init(reg, kLayer) == 3u);
-
-            AiConfig cfg;
-            cfg.enabled = true;
-            cfg.hysteresis = false;
-            cfg.rethinkBaseSec = 0.0f;
-            cfg.rethinkSpreadSec = 0.0f;
-            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, env);
-            CHECK(reg.get<AiBrain>(eHerm).currentIntent == IntentWork);
-            CHECK(reg.get<AiBrain>(ePlain).currentIntent == IntentFlee);
-            CHECK(reg.get<AiBrain>(eCorr).currentIntent == IntentFlee);
-        }
-
-        // 17c: Senses::heardSev -> Perception::gunfire + visible-foe direct escape
-        // fallback when danger field gradient and AiMemory are both empty.
+        // 17c: Senses::heardSev -> Perception::gunfire (a loud noise alone).
         {
             danger.fill(0.0f);
             Registry reg;
@@ -2514,7 +2453,7 @@ static void test_utilai_all() {
             pool.init();
             NpcId citId = 0, foeId = 0;
             Entity cit = make_body(reg, pool, 12, 12, 1, Faction::Citizens, citId);
-            Entity foe = make_body(reg, pool, 16, 12, 1, Faction::Wild, foeId);
+            (void)make_body(reg, pool, 16, 12, 1, Faction::Wild, foeId);
             Needs calm{};
             calm.food = kNeedMax;
             calm.water = kNeedMax;
@@ -2534,23 +2473,9 @@ static void test_utilai_all() {
             cfg.rethinkBaseSec = 0.0f;
             cfg.rethinkSpreadSec = 0.0f;
             ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
-                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+                    nullptr, nullptr, nullptr, 1);
             CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
 
-            // Visible armed foe against unarmed citizen with flat danger and no
-            // memory: claims SteerRank::Flee pointing away from foe (-X direction).
-            pool.inventory(foeId).slots[0] = ItemSlot{anyGun, 1};
-            reg.get<Senses>(cit) = Senses{foe, 4.0f, 1u, 0u, 2u};
-            const AiTick tick2 = ai_step(reg, pool, &danger, grid, kLayer, 1.0,
-                                         kSimDt, cfg, nullptr, nullptr, nullptr,
-                                         nullptr, 2, AiEnv{}, &base);
-            CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
-            CHECK(claim_rank(reg, cit, 2) == SteerRank::Flee);
-            CHECK(tick2.aiOwned >= 1u);
-            const Steer* sc = reg.try_get<Steer>(cit);
-            CHECK(sc != nullptr);
-            CHECK(sc->target.kind == TargetKind::Dir);
-            CHECK(sc->target.dir.x < -0.5f);
         }
     }
 }

@@ -15,14 +15,10 @@
 #include "game/needs.h"       // needs_roll — substitute for an unseeded pool row
 #include "game/combat.h"      // sync_armour — worn choice must reach the Armour component
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
-#include "game/faction_relations.h" // FactionRelations, nearest_faction_foe, kFeudRadius
-#include "game/hunt.h"              // fill_npc_bins_8m
 #include "game/noise.h"             // kNoiseSeverityMax
 #include "game/patrol.h"            // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
 #include "game/perceive.h"          // Senses — воспринятые враги без сквозного видения
 #include "game/ranged_table.h"      // equipped_ranged — armed check in Perception
-#include "game/room.h"              // FloorRooms, Room, room_of, kRoomTagHermetic
-#include "game/room_supply.h"       // room_at_pos — проверка гермоукрытия
 #include "game/rpg.h"               // RpgStats, capability — шов прогрессии
 #include "game/verb_table.h"        // kVerbStrike
 #include "game/zone_nav.h"    // ZoneNav — наряд ходит по зонам (§88/F.2)
@@ -156,62 +152,6 @@ float foe_combat_power(const Registry& reg, NpcPool& pool, Entity foeEnt) noexce
 
 } // namespace
 
-// Smooth cos^2 window of width 2*halfWidth around center on the 1440-minute torus.
-static float torus_day_window(float m, float center, float halfWidth) noexcept {
-    float d = std::fabs(m - center);
-    if (d > 720.0f) d = 1440.0f - d;
-    if (d >= halfWidth) return 0.0f;
-    const float c = std::cos(d * (1.57079632679f / halfWidth));
-    return c * c;
-}
-
-// Daily-rhythm utility bias aligned with core/watch.h lighting phases:
-//   Phase 0 (06:00-12:00): morning wake, toilet pulse, breakfast (07:30)
-//   Phase 1 (12:00-18:00): daytime work peak (15:00), lunch (13:00)
-//   Phase 2 (18:00-24:00): dinner (19:00), evening social peak (20:00)
-//   Phase 3 (00:00-06:00): dark/sleep peak (03:00), suppressed work/social
-// Returns 0 when minuteOfDay < 0 (or NaN) so clockless tests stay unchanged.
-float rhythm_bias(std::uint8_t intent, float minuteOfDay) {
-    if (!(minuteOfDay >= 0.0f)) return 0.0f;
-    float m = std::fmod(minuteOfDay, 1440.0f);
-    if (m < 0.0f) m += 1440.0f;
-
-    constexpr float kTwoPiPerDay = 6.28318530718f / 1440.0f;
-    // Peaks +1 at 03:00 (middle of Phase 3 dark), -1 at 15:00 (middle of Phase 1 work).
-    const float nightFactor = std::cos((m - 180.0f) * kTwoPiPerDay);
-    const float dayFactor = -nightFactor;
-    const float eveFactor = std::max(0.0f, std::cos((m - 1200.0f) * kTwoPiPerDay));
-
-    // Three non-overlapping 3h meal windows centered at 07:30, 13:00, 19:00.
-    const float mealPulse =
-        torus_day_window(m, 450.0f, 90.0f) +
-        torus_day_window(m, 780.0f, 90.0f) +
-        torus_day_window(m, 1140.0f, 90.0f);
-    const float toiletPulse = torus_day_window(m, 405.0f, 75.0f);
-
-    switch (intent) {
-        case IntentSleep:
-            return 18.0f * nightFactor;
-        case IntentWork:
-            return 14.0f * dayFactor;
-        case IntentEat:
-            return 14.0f * mealPulse - 4.0f * std::max(0.0f, nightFactor);
-        case IntentDrink:
-            return 10.0f * mealPulse + 3.0f * std::max(0.0f, dayFactor) -
-                   3.0f * std::max(0.0f, nightFactor);
-        case IntentToilet:
-            return 8.0f * toiletPulse - 3.0f * std::max(0.0f, nightFactor);
-        case IntentSocial:
-            return 8.0f * eveFactor - 8.0f * std::max(0.0f, nightFactor);
-        case IntentPatrol:
-            return 4.0f * nightFactor;
-        case IntentWander:
-            return 4.0f * dayFactor;
-        default:
-            return 0.0f;
-    }
-}
-
 // --------------------------------------------------------------------------
 // The pure utility scorer. Every coefficient is verbatim from the reference
 // `npc_utility.ts` per-intent bodies; the stubbed inputs sit at 0 in Perception,
@@ -253,9 +193,11 @@ void score_intents(const Perception& p, const Needs& needs,
     const auto tpen = [&](std::uint8_t intent) -> float {
         return p.targetPenalty[intent];
     };
-    const auto rhythm = [&](std::uint8_t intent) -> float {
-        return rhythm_bias(intent, p.minuteOfDay);
-    };
+    // rhythmBias is 0 for every intent: the general scorer holds NO daily
+    // routine. Clocks may weigh a choice only through the ONE time system (S15)
+    // and as DATA of a module (profession, mob type, floor model) — CANON S15.4,
+    // owner 2026-11-28; a routine of literals here is forbidden (S15.5).
+    const float rhythm = 0.0f;
     const auto stick = [&](std::uint8_t intent) -> float {
         return p.currentIntent == intent ? p.stickinessAmount : 0.0f;
     };
@@ -280,24 +222,24 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentFlee) + stick(IntentFlee) - tpen(IntentFlee));
 
     out[IntentToilet] =
-        clamp_score(toiletP * 92.0f + rhythm(IntentToilet) + local(IntentToilet) +
+        clamp_score(toiletP * 92.0f + rhythm + local(IntentToilet) +
                     stick(IntentToilet) - threat * 18.0f - tpen(IntentToilet));
 
     out[IntentDrink] =
-        clamp_score(drinkP * 88.0f + rhythm(IntentDrink) + local(IntentDrink) +
+        clamp_score(drinkP * 88.0f + rhythm + local(IntentDrink) +
                     stick(IntentDrink) - threat * 16.0f - tpen(IntentDrink));
 
-    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm(IntentEat) + local(IntentEat) +
+    out[IntentEat] = clamp_score(eatP * 86.0f + rhythm + local(IntentEat) +
                                  stick(IntentEat) - threat * 16.0f -
                                  tpen(IntentEat));
 
     out[IntentSleep] = clamp_score(
-        sleepP * 76.0f + rhythm(IntentSleep) /* + occupation sleep bonus (0: no occupations) */ +
+        sleepP * 76.0f + rhythm /* + occupation sleep bonus (0: no occupations) */ +
         local(IntentSleep) + stick(IntentSleep) - threat * 30.0f -
         (p.samosborActive ? 18.0f : 0.0f) - tpen(IntentSleep));
 
     out[IntentWork] = clamp_score(
-        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm(IntentWork) + local(IntentWork) +
+        tr.duty * 34.0f + tr.workDrive * 18.0f + rhythm + local(IntentWork) +
         stick(IntentWork) - urgent * 30.0f - threat * 42.0f -
         (p.samosborActive ? 45.0f : 0.0f) - tpen(IntentWork));
 
@@ -306,7 +248,7 @@ void score_intents(const Perception& p, const Needs& needs,
         local(IntentHeal) + stick(IntentHeal) - threat * 10.0f - tpen(IntentHeal));
 
     out[IntentSocial] = clamp_score(
-        tr.sociability * 29.0f + rhythm(IntentSocial) + local(IntentSocial) +
+        tr.sociability * 29.0f + rhythm + local(IntentSocial) +
         stick(IntentSocial) - urgent * 15.0f - threat * 34.0f -
         (p.samosborActive ? 25.0f : 0.0f) - tpen(IntentSocial));
 
@@ -317,7 +259,7 @@ void score_intents(const Perception& p, const Needs& needs,
         p.faction != static_cast<std::uint16_t>(Faction::Liquidators) &&
         p.faction != static_cast<std::uint16_t>(Faction::Cultists);
     out[IntentPatrol] = clamp_score(
-        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm(IntentPatrol) + threat * 10.0f +
+        tr.patrolDrive * 36.0f + tr.duty * 18.0f + rhythm + threat * 10.0f +
         local(IntentPatrol) + stick(IntentPatrol) - urgent * 18.0f -
         (patrolSamosborPenalty ? 24.0f : 0.0f) - tpen(IntentPatrol));
 
@@ -330,7 +272,7 @@ void score_intents(const Perception& p, const Needs& needs,
     const float wanderJitter =
         jitter_signed(channel_seed(p.idSeed, "wander_score"), 3.0f);
     out[IntentWander] = clamp_score(
-        9.0f + rhythm(IntentWander) + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
+        9.0f + rhythm + wanderJitter + (p.isTraveler ? 19.0f : 0.0f) +
         local(IntentWander) + stick(IntentWander) - urgent * 12.0f -
         threat * 22.0f - tpen(IntentWander));
 
@@ -639,7 +581,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg, AiMemory* mem,
                const void* doorsDead, const World* world, EventBus* bus,
-               std::uint64_t tick, AiEnv env, const FactionRelations* rel) {
+               std::uint64_t tick) {
     AiTick out;
     // Dormant by default. Returning before the sweep means a disabled AI costs
     // one branch, and выключить ИИ на живом этаже теперь безопасно само:
@@ -692,8 +634,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
     // Пул заявок прогрет ДО открытия вида (снятие УБ, [game/guide.h]).
     steer_pool_warm(reg);
     // СКОРОСТИ В ВИДЕ НЕТ: бегство заявляет ПЕЛЕНГ, пишет `guide_step`.
-    static thread_local CellBins aiBins8m;
-    bool aiBinsBuilt = false;
     auto view = reg.view<AiBrain, const NpcRef, const Transform>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
@@ -755,8 +695,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         // constant instead of a per-tick row scan over the whole crowd.
         const bool wantReplan = now >= static_cast<double>(brain.nextDecisionAt);
         bool haveRecall = false;
-        if (useMem && (wantReplan || brain.currentIntent == IntentFlee ||
-                       brain.currentIntent == IntentSafety)) {
+        if (useMem && (wantReplan || brain.currentIntent == IntentFlee)) {
             recall = ai_recall(*mem, id, cx, cy, cz, now);
             haveRecall = true;
             ++out.recalled;
@@ -773,15 +712,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.hp = static_cast<float>(hpNow);
             p.maxHp = static_cast<float>(pool.max_hp(id));
             p.danger = dangerHere;
-            p.minuteOfDay = env.minuteOfDay;
-            p.samosborActive = env.samosborActive;
-            p.samosborWarning = env.samosborWarning;
-            p.fog = env.samosborActive ? 1.0f : (env.samosborWarning ? 0.35f : 0.0f);
-            if (env.rooms != nullptr) {
-                const RoomId rid = room_at_pos(*env.rooms, tr.pos);
-                p.inShelter =
-                    (env.rooms->room_tags(rid) & kRoomTagHermetic) != 0;
-            }
             const Equipped* eq = reg.try_get<Equipped>(e);
             const Inventory& inv = pool.inventory(id);
             const bool selfRanged = (equipped_ranged(inv, eq) != kInvalidItem);
@@ -801,21 +731,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     foeEnt = sen->foe;
                     if (reg.all_of<MobRef>(foeEnt))
                         p.monster = 1.0f;
-                }
-            } else if (rel != nullptr) {
-                // Без Senses (прямые юнит-тесты без perceive_step): фолбэк на
-                // общие 8 м бины, чтобы старт этажа не взрывался в O(N^2).
-                if (!aiBinsBuilt) {
-                    fill_npc_bins_8m(reg, layer, aiBins8m);
-                    aiBinsBuilt = true;
-                }
-                const FactionFoe foe = nearest_faction_foe(
-                    reg, pool, *rel, layer, e, id, tr.pos, kFeudRadius,
-                    &aiBins8m);
-                if (foe.e != entt::null) {
-                    foeEnt = foe.e;
-                    p.visibleHostiles = 1.0f;
-                    p.threatDistance = wrap_dist(tr.pos, foe.pos, kWorldExtent);
                 }
             }
             if (foeEnt != entt::null) {
@@ -892,8 +807,7 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
         vec3 dir{0.0f, 0.0f, 0.0f};
         bool owned = false;
         bool viaMemory = false;
-        if (brain.currentIntent == IntentFlee ||
-            brain.currentIntent == IntentSafety) {
+        if (brain.currentIntent == IntentFlee) {
             // §23 hermetic shelter first: a sealed apartment is a real destination
             // during Samosbor purple fog, not just "away from the gradient". Both
             // world and doors must be live (main wires them; tests pass null and
@@ -931,32 +845,6 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     dir = away * (1.0f / std::sqrt(d2));
                     owned = true;
                     viaMemory = true;
-                }
-            }
-            // Live visible/sensed foe escape fallback when both danger field
-            // gradient and danger memory are flat/empty.
-            if (!owned) {
-                if (const Senses* sen = reg.try_get<Senses>(e);
-                    sen != nullptr && sen->foe != entt::null &&
-                    reg.valid(sen->foe) &&
-                    !reg.any_of<Dead, Corpse>(sen->foe)) {
-                    if (const Transform* foeTr =
-                            reg.try_get<Transform>(sen->foe);
-                        foeTr != nullptr && foeTr->layer == layer) {
-                        const float dx = wrap_delta_f(
-                            foeTr->pos.x, tr.pos.x, kWorldExtent);
-                        const float dy = wrap_delta_f(
-                            foeTr->pos.y, tr.pos.y, kWorldExtent);
-                        const float dz = wrap_delta_f(
-                            foeTr->pos.z, tr.pos.z, kWorldExtent);
-                        const vec3 away = tangent(dx, dy, dz);
-                        const float d2 =
-                            away.x * away.x + away.y * away.y + away.z * away.z;
-                        if (d2 > 1e-8f) {
-                            dir = away * (1.0f / std::sqrt(d2));
-                            owned = true;
-                        }
-                    }
                 }
             }
         }

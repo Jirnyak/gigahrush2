@@ -269,7 +269,6 @@
 #include <vector>
 
 #include "core/rng.h"          // hash_u32 / hash2 / rand01 — stateless identity hashing
-#include "core/watch.h"        // kCycleTicks — суточные часы для rhythm и AiEnv
 #include "ecs/components.h"    // CameraTag — половина ответа decider_of
 #include "ecs/registry.h"      // Registry, Entity
 #include "game/combat.h"       // Corpse — первая ветка decider_of: мёртвый без решателя
@@ -278,7 +277,6 @@
 #include "game/faction.h"
 #include "game/guide.h"      // kWalkSpeedMps/kPanicPace — ОДИН дом скорости ходьбы      // Faction / kFactionCount — the trait table's index
 #include "game/npc_pool.h"     // NpcPool, NpcId, Needs (the pool row this reads)
-#include "game/samosbor.h"     // SamosborPhase — фаза Самосбора для AiEnv
 #include "game/zone_nav.h"     // ZoneNav — наряд ходит по зонам (§88/F.2)
 #include "world/level_stack.h" // LayerId
 #include "world/types.h"       // kCellSize — the seat radius is stated in cells
@@ -962,44 +960,6 @@ inline float stickiness_amount(float stateTimer) {
     return kStickBase + (grown < kStickCap ? grown : kStickCap);
 }
 
-// Convert simTick to minute of day [0, 1440) aligned with core/watch.h lighting
-// phases (0 = full 06:00-12:00, 1 = work 12:00-18:00, 2 = duty 18:00-24:00,
-// 3 = dark 00:00-06:00). Bitmask avoids u64 modulo/division per S15.
-[[nodiscard]] inline float watch_minute_of_day(std::uint64_t tick) noexcept {
-    const std::uint32_t cycTick =
-        static_cast<std::uint32_t>(tick & (kCycleTicks - 1ull));
-    constexpr float kMinsPerTick = 1440.0f / static_cast<float>(kCycleTicks);
-    float m = static_cast<float>(cycTick) * kMinsPerTick + 360.0f;
-    if (m >= 1440.0f) m -= 1440.0f;
-    return m;
-}
-
-// Per-intent daily-rhythm utility bias from Perception::minuteOfDay.
-// Returns 0 when minuteOfDay < 0 (no clock); sleep rises at night (Phase 3),
-// work peaks by day (Phase 1), and eat/drink peak around breakfast/lunch/dinner.
-[[nodiscard]] float rhythm_bias(std::uint8_t intent, float minuteOfDay);
-
-// World environment snapshot injected into ai_step for replans.
-// Defaults keep legacy callers (no clock, calm world) bit-identical.
-struct FloorRooms; // game/room.h — заголовку хватает указателя
-struct AiEnv {
-    float minuteOfDay = -1.0f;
-    bool samosborActive = false;
-    bool samosborWarning = false;
-    const FloorRooms* rooms = nullptr;
-};
-
-[[nodiscard]] inline AiEnv ai_env(std::uint64_t tick,
-                                  SamosborPhase phase = SamosborPhase::Idle,
-                                  const FloorRooms* rooms = nullptr) noexcept {
-    return AiEnv{
-        watch_minute_of_day(tick),
-        phase == SamosborPhase::Active,
-        phase == SamosborPhase::Warning,
-        rooms,
-    };
-}
-
 // Pure scorer: fill out[kIntentCount] with each intent's 0..100 utility. No side
 // effects, no world reads, order-independent. The current intent's stickiness
 // bonus is applied HERE (via Perception::stickinessAmount) so `select_intent`
@@ -1167,14 +1127,12 @@ std::uint32_t ai_init(Registry& reg, LayerId layer);
 // тик, а деяние публикуется раз в ТАКТ на пациента (stateless дебаунс
 // границей kTactTicks — ср. «одно взятие в час» S12.5).
 class EventBus; // game/event_bus.h — заголовку хватает указателя
-struct FactionRelations; // game/faction_relations.h — заголовку хватает указателя
 AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                const MacroGrid& grid, LayerId layer, double now, float dt,
                const AiConfig& cfg = {}, AiMemory* mem = nullptr,
                const void* doorsDead = nullptr, // МОГИЛА ДВЕРЕЙ: слот пустует до новой системы
                const World* world = nullptr, EventBus* bus = nullptr,
-               std::uint64_t tick = 0, AiEnv env = {},
-               const FactionRelations* rel = nullptr);
+               std::uint64_t tick = 0);
 
 } // namespace giga::game
 
