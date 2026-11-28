@@ -2818,7 +2818,11 @@ if(GIGA_BUILD_TESTS)
         #     `suite_destruct.inl` (carve clears StainRGB paged slot),
         #     `suite_zonenav.inl` (24-neighbor hub overflow + multi-storey stair zone_walk_dir transit + floor connectivity matrix),
         #     `suite_soak.inl` (3000-tick headless soak with Samosbor, wander, guide, carve+stain, save/load cycle, 0 audit violations).
-        PASS_REGULAR_EXPRESSION "game_test: 253518 checks, 0 failures")
+        # 253518 -> 253526 (+8, 2026-11-28, стенд владельца): `suite_craft.inl` —
+        #   один слот инвентаря не стоит в обеих руках (equip_hand/equip_item одной
+        #   дверью). Плюс сборка снова зелёная: suite_soak звал `needs_step` с
+        #   FloorRooms* — параметром откатанного гермо-регена (bfaf1a66).
+        PASS_REGULAR_EXPRESSION "game_test: 253526 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

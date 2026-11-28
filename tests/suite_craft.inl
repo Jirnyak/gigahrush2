@@ -950,6 +950,23 @@ static void test_craft_all() {
         CHECK(!equip_item(bag2, eq, 63));
         CHECK(unequip_slot(eq, EquipSlot::Armor));
         CHECK(equipped_armour(bag2, &eq) == kInvalidItem);
+
+        // ОДИН СЛОТ — ОДНА РУКА (стенд владельца 2026-11-28: один АК стоял в
+        // обеих руках и стрелял парой). Взять в другую руку = переложить; обе
+        // двери (equip_hand и equip_item) держат закон одним местом.
+        Inventory bag3{};
+        bag3.slots[0] = ItemSlot{gun, 1};
+        Equipped eh{};
+        CHECK(equip_hand(bag3, eh, 0, false));
+        CHECK(equip_hand(bag3, eh, 0, true));
+        CHECK(eh.handR == 0 && eh.handL == kEquipNone);
+        CHECK(equipped_hand(bag3, eh, true) == gun);
+        CHECK(equipped_hand(bag3, eh, false) == kInvalidItem);
+        const bool defRight =
+            item_def(gun).equipSlot == static_cast<std::uint8_t>(EquipSlot::Tool);
+        CHECK(equip_item(bag3, eh, 0));
+        CHECK((defRight ? eh.handR : eh.handL) == 0);
+        CHECK((defRight ? eh.handL : eh.handR) == kEquipNone);
     }
 
     { // ---- wear: the durability column IS the lifetime ([equip.h]) ----------

@@ -30,6 +30,10 @@ bool equip_item(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx) {
     const ItemSlot& s = inv.slots[slotIdx];
     if (s.item == kInvalidItem || s.count == 0 || !item_valid(s.item)) return false;
     const EquipSlot target = static_cast<EquipSlot>(item_def(s.item).equipSlot);
+    // Руки — одной дверью: hand-предмет идёт через equip_hand (там закон
+    // «один слот — одна рука»), def лишь называет руку по умолчанию.
+    if (hand_accepts(target))
+        return equip_hand(inv, eq, slotIdx, target == EquipSlot::Tool);
     std::uint8_t* cell = eq_cell(eq, target);
     if (!cell) return false; // equip_slot=None: предмет не носится
     *cell = slotIdx;
@@ -65,6 +69,13 @@ bool equip_hand(const Inventory& inv, Equipped& eq, std::uint8_t slotIdx,
         return false;
     if (!hand_accepts(static_cast<EquipSlot>(item_def(s.item).equipSlot)))
         return false;
+    // ОДИН СЛОТ ИНВЕНТАРЯ — НЕ БОЛЬШЕ ОДНОЙ РУКИ. Без этого один АК стоял
+    // в обеих руках, и каждая рука стреляла своим GunHand — пара из одного
+    // ствола. Взять в другую руку то, что уже в руке, — переложить, не отказ.
+    // Нюанс (назван владельцу 2026-11-28): стопка гранат тоже один слот —
+    // две гранаты из одной стопки в две руки только после разделения стопки.
+    std::uint8_t& other = right ? eq.handL : eq.handR;
+    if (other == slotIdx) other = kEquipNone;
     (right ? eq.handR : eq.handL) = slotIdx;
     return true;
 }
