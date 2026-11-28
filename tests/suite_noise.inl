@@ -1033,7 +1033,7 @@ static void test_noise_moves_a_monster_that_cannot_see_you() {
         // which is what makes the loud and silent runs identical in every other way.
         if (def)
             r.reg.emplace_or_replace<PlayerRanged>(
-                r.player, PlayerRanged{def->magazine, gun, 0, 0});
+                r.player, PlayerRanged{{GunHand{def->magazine, gun}, GunHand{}}, 0, 0});
 
         // A Zombie: Plain behaviour, ordinary speed, nothing special to confound the
         // measurement. ВЗГЛЯДА РУКОЙ НЕ ВЫДАНО — его напишет `look_step` в кадре,

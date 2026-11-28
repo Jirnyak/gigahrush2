@@ -872,7 +872,17 @@ static void test_t1_f15_05_samosbor_floor_transit_preserves_cycle_count() {
 static void test_t2_f2_03_single_npc_monoculture_spec() {
     NpcPool pool;
     pool.init();
-    FloorSpec mono{FloorKind::Residential, "mono", 50u, {1, 0, 0, 0, 0}, 0.0f, 25, 30};
+    // Значением, затем по полям: агрегатная запись с хвостом без значений
+    // (устройства, плафоны) давала -Wmissing-field-initializers на каждое
+    // новое поле спеки. Невыписанные поля — ноль, как и прежде.
+    FloorSpec mono{};
+    mono.kind = FloorKind::Residential;
+    mono.name = "mono";
+    mono.population = 50u;
+    mono.factionMix[0] = 1;
+    mono.hostility = 0.0f;
+    mono.minAge = 25;
+    mono.maxAge = 30;
     seed_floor_from_spec(pool, 1, mono, 999u);
     CHECK(pool.count() == 50u);
     for (NpcId id = 0; id < 50; ++id) {

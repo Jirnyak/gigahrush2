@@ -1694,27 +1694,6 @@ static void test_detached_prop_is_rigid_body() {
 
 // --- [jirnyak.md] section 18: terminal interact must not fake-hit ---------------
 
-static Entity make_actor_at(Registry& reg, LayerId layer, const vec3& pos) {
-    const Entity e = reg.create();
-    Transform t{};
-    t.pos = pos;
-    t.layer = layer;
-    reg.emplace<Transform>(e, t);
-    return e;
-}
-
-static Entity make_terminal_at(Registry& reg, LayerId layer, const vec3& pos) {
-    const Entity e = reg.create();
-    Transform t{};
-    t.pos = pos;
-    t.layer = layer;
-    reg.emplace<Transform>(e, t);
-    game::Interactable ia{};
-    ia.kind = game::Interactable::Kind::Terminal;
-    reg.emplace<game::Interactable>(e, ia);
-    return e;
-}
-
 // test_find_nearest_terminal_respects_reach СНЕСЁН 2026-11-07 вместе с парой
 // find_nearest_interactable/interaction_step: тест проверял сами символы
 // (критерий [purge-2026-09-30]), прод-вызовов у пары не было (wired §52).

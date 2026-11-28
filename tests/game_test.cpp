@@ -599,8 +599,16 @@ static void test_seed_from_spec() {
     // A monoculture spec: everyone faction 0, ages within [20,40].
     NpcPool pool;
     pool.init();
-    FloorSpec mono{FloorKind::Residential, "mono", 100u,
-                   {1, 0, 0, 0}, 0.0f, 20, 40, {}, {}};
+    // Значением, затем по полям — довод у двойника в e2e_test.cpp
+    // (`test_t2_f2_03_single_npc_monoculture_spec`).
+    FloorSpec mono{};
+    mono.kind = FloorKind::Residential;
+    mono.name = "mono";
+    mono.population = 100u;
+    mono.factionMix[0] = 1;
+    mono.hostility = 0.0f;
+    mono.minAge = 20;
+    mono.maxAge = 40;
     NpcId cand = seed_floor_from_spec(pool, /*floor=*/3, mono, /*seed=*/9u);
     CHECK(cand != kInvalidNpc);
     CHECK(pool.count() == 100u); // seeded exactly spec.population records

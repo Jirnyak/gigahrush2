@@ -643,7 +643,7 @@ static void test_rpg_combat_wire() {
         reg.emplace<CameraTag>(shooter, cam);
         // Pre-armed: skip the gun-swap + reload branches so tick 0 fires.
         reg.emplace<PlayerRanged>(
-            shooter, PlayerRanged{def->magazine, gun, 0, 0});
+            shooter, PlayerRanged{{GunHand{def->magazine, gun}, GunHand{}}, 0, 0});
 
         CHECK(player_ranged_step(reg, pool, layer, /*wantFireL=*/true, false, dt,
                                  /*tick=*/1u) == 1u);
@@ -695,7 +695,7 @@ static void test_rpg_combat_wire() {
         reg.emplace<RpgStats>(shooter, rs);
 
         reg.emplace<PlayerRanged>(
-            shooter, PlayerRanged{def->magazine, gun, 0, 0});
+            shooter, PlayerRanged{{GunHand{def->magazine, gun}, GunHand{}}, 0, 0});
 
         const std::uint32_t agiE3 = agi_attack_speed_mult_e3(rs);
         const std::uint32_t expectCd =
