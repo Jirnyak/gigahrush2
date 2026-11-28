@@ -732,7 +732,8 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         const AABB* box = reg.try_get<AABB>(e);
         const vec3 half = box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f};
         const SteerStep st = steer_to_zone(
-            *zones, gf, ground, tr.pos, half, cx, cy, cz, myZone, plan.room);
+            *zones, gf, ground, tr.pos, half, cx, cy, cz, myZone, plan.room,
+            steer_climbs(reg, e));
         // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам
         // падает ⟺ ходок доходит.
         const std::uint16_t zd = zones->dist.at(
@@ -742,9 +743,14 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             out.zoneDistSum += zd;
             ++out.zoneDistBodies;
         }
-        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::Edge) {
+        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::Edge ||
+            st.fail == SteerFail::StepUp ||
+            steer_stalled(reg, e, plan.room)) {
             // Маршрута нет (разные компоненты связности, или цель в толще) —
-            // либо за шагом обрыв, падение с которого ранит (сторож ведения).
+            // либо за шагом обрыв, падение с которого ранит (сторож ведения),
+            // либо ступень вверх у НЕЛАЗАЮЩЕГО тела (CANON S30): исполнить её
+            // нечем, а держать цель значило стоять под ступенькой вечно. И
+            // дозор хода (S30 п.5): тело упёрлось, и шаг ему неисполним.
             // Цель снимается со стаггером: пере-спрашивать каждый тик значило
             // бы платить ценой запроса за безнадёжное тело каждый кадр.
             if (st.fail == SteerFail::Edge) ++out.edge;
@@ -762,16 +768,10 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
         // `wander_step` и не ведётся никем — то есть ЗАМИРАЕТ, а замирающий NPC
         // есть дефект (S13.2). Поймано на себе при посадке проверки
         // проходимости ниже: `continue` стоял после забора.
-        if (st.fail == SteerFail::StepUp) {
-            // Единственный случай, когда дверь зон отдаёт шаг ВДОЛЬ гравитации:
-            // ступенька и есть выход из зоны. Тангенциального пеленга у него
-            // ровно ноль, то есть вести этим шагом нечем — тело отдаётся
-            // вандеру, а цель ОСТАЁТСЯ (токен не забран). Слепую прямую на цель
-            // здесь не берём сознательно: ровно она была остатком якоря у
-            // решётки и стоила §88 нуля прибытий.
-            ++out.idle;
-            continue;
-        }
+        // Шаг ВВЕРХ лазающего (`st.up`) исполним — заявка ниже как всякая
+        // (CANON S30). Ветка «цель остаётся, тело отдаётся вандеру» под
+        // ступенькой снята 2026-11-28: вандер такое тело не уводил, и оно
+        // стояло вечно; неисполнимая ступень теперь снимается выше.
         if (st.fail == SteerFail::NoBearing) {
             // Направления нет (проекция опустошила вектор, или тело стоит в
             // целевой клетке). Владеемый ноль здесь был бы остановкой на ровном

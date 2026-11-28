@@ -891,16 +891,16 @@ static void test_place_errand_walks() {
     CHECK(stepGuide.stale == 0); // заявка ЭТОГО тика, а не прошлого
     CHECK(std::fabs(reg.get<Velocity>(e).v.x - kErrandSpeed) < 1e-4f);
 
-    // СТУПЕНЬКА: дверь зон отдала шаг ВДОЛЬ гравитации. Тангенциального пеленга
-    // у него ровно ноль, вести им нечем — тело отдаётся вандеру, а цель
-    // ОСТАЁТСЯ. Слепой прямой на цель здесь нет СОЗНАТЕЛЬНО: ровно она была
-    // остатком якоря у решётки и стоила §88 нуля прибытий.
-    // Эта ветка решёточными тестами НЕ покрывалась вовсе — её не существовало.
-    //
-    // «ТОКЕН НЕ ЗАБРАН» ТЕПЕРЬ ЗВУЧИТ ТАК: ЗАЯВКА НЕ ПОДАНА. Это не перевод
-    // слов, а другое утверждение, и оно сильнее: подать заявку и провалить её
-    // значило бы ОТНЯТЬ тело у прогулки, которая его ещё провела бы (тело
-    // замерло бы, а замирающий NPC есть дефект S13.2).
+    // СТУПЕНЬКА: дверь зон отдала шаг ВДОЛЬ гравитации (CANON S30, владелец
+    // 2026-11-28 — «лазают все»). До этого дня ветка стояла так: «цель
+    // ОСТАЁТСЯ, заявки нет, тело отдаётся вандеру» — и вандер такое тело не
+    // уводил, оно стояло под ступенькой ВЕЧНО (стенд владельца: ~17 из 60
+    // нарядов на хрущах). Теперь исход решает СПОСОБНОСТЬ тела, одной дверью:
+    //   * лазающее (житель рождается с лазаньем) — шаг ИСПОЛНИМ: заявка
+    //     подаётся, писатель ставит «лезь вверх, пока касаешься», касательной
+    //     скорости нет;
+    //   * нелазающее (скорость лазанья 0 — частный случай закона) — шаг
+    //     неисполним, и цель снимается со стаггером, как при «маршрута нет».
     constexpr std::uint64_t kStepUpTick = 3;
     arm_zones_errand(zones, boundary, bodyZone, home, /*flowByte=*/5); // +z
     // Чтобы дверь зон ОТДАЛА вертикальный шаг, он обязан быть ВЫХОДОМ из зоны:
@@ -909,27 +909,43 @@ static void test_place_errand_walks() {
     // клетка над телом принадлежит зоне ЦЕЛИ — это и есть ступенька.
     zones.part.at[macro_index(wrap_macro(bx), wrap_macro(by), wrap_macro(bz + 1))] =
         home;
+    CHECK(steer_climbs(reg, e)); // житель лезет с рождения
     reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
     const PlaceTick stepup =
         place_errand_step(reg, pool, fr, kLayer, 0.0, kStepUpTick, nullptr, &zones);
-    CHECK(stepup.walking == 0);
-    CHECK(stepup.idle == 1);
-    CHECK(stepup.unreachable == 0); // это не отказ маршрута, а отказ ВЕСТИ
+    CHECK(stepup.walking == 1);
+    CHECK(stepup.idle == 0);
+    CHECK(stepup.unreachable == 0);
     CHECK(reg.get<ErrandPlan>(e).room == home); // цель НЕ потеряна
-    CHECK(live_claim(reg, e, kStepUpTick) == nullptr);           // заявки нет
-    CHECK(!steer_claimed_by_stronger(reg, e, SteerRank::Walk, kStepUpTick)); // → прогулке
-    // ...И ПИСАТЕЛЬ ПРОШЛУЮ ЗАЯВКУ НЕ ИСПОЛНЯЕТ. На теле лежит заявка тика
-    // `kStepTick` (дело её подало и больше не обновляло), и проход обязан
-    // прочитать её как УСТАРЕВШУЮ: тело стоит на прошлой скорости, то есть
-    // ровно там, где его оставил прошлый кадр. Мутация «`steer_claim_live` не
-    // сравнивает тик» красит эту тройку строк — отказ вести молча превратился
-    // бы в езду по снятому решению.
+    const Steer* upClaim = live_claim(reg, e, kStepUpTick);
+    CHECK(upClaim != nullptr && upClaim->target.kind == TargetKind::Zone);
     const GuideTick stepupGuide =
         guide_step(reg, zones, kLayer, kStepUpTick, nullptr, nullptr);
-    CHECK(guide_writes(stepupGuide) == 0);
-    CHECK(stepupGuide.stale == 1);
-    CHECK(reg.get<Velocity>(e).v.x == kSentX);  // и тело не тронуто
-    CHECK(reg.get<Velocity>(e).v.y == kSentY);
+    CHECK(stepupGuide.climbUp == 1);
+    CHECK(guide_writes(stepupGuide) == 1);
+    CHECK(reg.get<Climb>(e).up);                 // «лезь вверх, пока касаешься»
+    CHECK(reg.get<Velocity>(e).v.x == 0.0f);     // держаться, а не идти
+    CHECK(reg.get<Velocity>(e).v.y == 0.0f);
+
+    // ТА ЖЕ СТУПЕНЬ У НЕЛАЗАЮЩЕГО. Заявка прошлой сцены снята, чтобы «заявки
+    // нет» судило этот вызов, а не её. Цель сохраняется и возвращается после
+    // сцены вместе с учётом занятости (снятие цели вычло тело из комнаты).
+    const ErrandPlan keep = reg.get<ErrandPlan>(e);
+    reg.get<Climb>(e).speed = 0.0f;
+    reg.get<Climb>(e).up = false;
+    reg.remove<Steer>(e);
+    reg.get<Velocity>(e).v = vec3{kSentX, kSentY, 0.0f};
+    const PlaceTick noClimb =
+        place_errand_step(reg, pool, fr, kLayer, 0.0, kStepUpTick, nullptr, &zones);
+    CHECK(noClimb.walking == 0);
+    CHECK(noClimb.idle == 1);
+    CHECK(noClimb.unreachable == 1);              // шаг этому телу неисполним
+    CHECK(reg.get<ErrandPlan>(e).room == kNoRoom); // цель СНЯТА — не стоять вечно
+    CHECK(live_claim(reg, e, kStepUpTick) == nullptr);
+    CHECK(reg.get<Velocity>(e).v.x == kSentX);    // заявитель не пишет
+    reg.get<ErrandPlan>(e) = keep;
+    room_occupant_add(fr, home, +1);
+    reg.get<Climb>(e).speed = kWalkSpeedMps * kHumanClimbOfWalk;
 
     // ТЕЛО ВНЕ РАЗБИВКИ. Клетка центра тела бывает дыркой в разбивке (замер:
     // 26 тел на тик) — вести его некуда, отдаём вандеру, цель на месте. Это

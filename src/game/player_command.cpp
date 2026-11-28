@@ -44,6 +44,13 @@ void apply_player_command(Registry& reg, Entity avatar, const PlayerCommand& cmd
     // Movement intent, camera-local, verbatim from the command.
     ctl->wishDir = cmd.wishDir;
 
+    // ЛАЗАНЬЕ (CANON S30) — та же просьба, что ставит телу жителя писатель
+    // ведения: ИДУЩЕЕ тело лезет, если упёрлось. Отдельной клавиши нет
+    // сознательно (владелец 2026-11-28: «как минимальнее и чище, чтобы не было
+    // спецпутей»): игрок не особенный, его ввод — лишь другой писатель флажка.
+    if (!ctl->fly && (cmd.wishDir.x != 0.0f || cmd.wishDir.y != 0.0f))
+        if (auto* c = reg.try_get<Climb>(avatar)) c->wants = true;
+
     // Jump only bites in walk mode (fly uses wishDir.z), and only if the avatar
     // can jump — same guard as before.
     if (has_button(cmd.buttons, Button::Jump) && !ctl->fly) {

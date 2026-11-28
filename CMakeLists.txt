@@ -1044,7 +1044,11 @@ if(GIGA_BUILD_TESTS)
         #   ноль тиков в тверди одним счётчиком, просьба погашена физикой).
         #   Мутации прогнаны: лазанье выключено, просьба не нужна, «вверх» = +Z
         #   литерал, просьба не гаснет — все четыре красные, база зелёная.
-        PASS_REGULAR_EXPRESSION "16190/16190 checks passed"
+        # 16190 + 24 = 16214 там же: край в пределах двух ростов — потолок
+        #   над стеной больше не даёт висеть (лазанья нет вовсе), стена выше
+        #   досягаемости по упору не лезется, а по шагу нава «вверх» — лезется;
+        #   2 прогона × 4 проверки × 3 гравитации.
+        PASS_REGULAR_EXPRESSION "16214/16214 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -2827,7 +2831,14 @@ if(GIGA_BUILD_TESTS)
         #   один слот инвентаря не стоит в обеих руках (equip_hand/equip_item одной
         #   дверью). Плюс сборка снова зелёная: suite_soak звал `needs_step` с
         #   FloorRooms* — параметром откатанного гермо-регена (bfaf1a66).
-        PASS_REGULAR_EXPRESSION "game_test: 253526 checks, 0 failures")
+        # 253526 -> 253556 (+30, 2026-11-28, CANON S30 лазанье): `suite_climb.inl` +23
+        #   (дверь по способности и знаку фрейма 5, писатель просит лезть 10, дозор
+        #   хода 5, наряд бросает 1, прогулка бросает — в обе полярности 2);
+        #   `suite_place.inl` ступенька переписана на новый закон: 10 -> 17 (+7)
+        #   — лазающее тело ступень исполняет, нелазающее бросает цель. Мутации
+        #   прогнаны (дверь без способности, знак фрейма, окно по лазанью всегда,
+        #   наряд и прогулка без дозора, писатель без просьбы) — все красные.
+        PASS_REGULAR_EXPRESSION "game_test: 253556 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

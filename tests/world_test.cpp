@@ -974,10 +974,12 @@ static void test_climb_law() {
     auto axis = [](const vec3& v, int comp) {
         return comp == 0 ? v.x : comp == 1 ? v.y : v.z;
     };
-    // `climbSpeed` 0 — не лазает; `ask` — писатель ставит просьбу; `ceiling` —
-    // плита над подходом и над стеной (лезть некуда).
+    // `climbSpeed` 0 — не лазает; `ask` — писатель ставит «лезь, если упёрся»;
+    // `askUp` — «лезь вверх, пока касаешься» (шаг нава вдоль g); `ceiling` —
+    // плита над подходом и над стеной (лезть некуда); `wallCells` — высота стены
+    // в клетках (4 = 8 м: выше досягаемости края в два роста).
     auto run = [&](const Frame& f, float climbSpeed, bool ask, bool ceiling,
-                   bool& sawClimb) {
+                   bool& sawClimb, bool askUp = false, int wallCells = 1) {
         LevelStack stack;
         const LayerId l = stack.push_layer();
         World& w = stack.layer(l);
@@ -990,8 +992,10 @@ static void test_climb_law() {
                 w.grid().fill_cell(x, y, z, 1); // пол
             }
         for (int sd = 0; sd < 20; ++sd) {
-            cell(f, 12, sd, 5, x, y, z);
-            w.grid().fill_cell(x, y, z, 1); // стена 2 м поперёк хода
+            for (int h = 5; h < 5 + wallCells; ++h) {
+                cell(f, 12, sd, h, x, y, z);
+                w.grid().fill_cell(x, y, z, 1); // стена поперёк хода
+            }
             if (ceiling)
                 for (int wk = 9; wk <= 12; ++wk) {
                     cell(f, wk, sd, 6, x, y, z);
@@ -1022,12 +1026,13 @@ static void test_climb_law() {
             (f.walk == 0 ? v.x : f.walk == 1 ? v.y : v.z) = 1.35f;
             reg.get<Velocity>(e).v = v;
             reg.get<Climb>(e).wants = ask;
+            reg.get<Climb>(e).up = askUp;
             physics_step(reg, stack, kSimDt);
             sawClimb = sawClimb || reg.get<Climb>(e).climbing;
             if (aabb_overlaps_solid(w, reg.get<Transform>(e).pos, half)) ++inSolid;
         }
         CHECK(inSolid == 0);
-        CHECK(!reg.get<Climb>(e).wants); // просьба гаснет физикой
+        CHECK(!reg.get<Climb>(e).wants && !reg.get<Climb>(e).up); // гаснут физикой
         return axis(reg.get<Transform>(e).pos, f.walk) / kCellSize;
     };
     for (const Frame& f : frames) {
@@ -1041,8 +1046,15 @@ static void test_climb_law() {
         // Без просьбы ведения не лезет и способный.
         CHECK(run(f, 0.5f, false, false, saw) < 12.0f);
         CHECK(!saw);
-        // Потолок: лезет (упор есть), но не проходит и в твердь не входит.
+        // Потолок: края нет — не лезет вовсе (висеть на стене незачем), не
+        // проходит и в твердь не входит.
         CHECK(run(f, 0.5f, true, true, saw) < 12.0f);
+        CHECK(!saw);
+        // Стена выше двух ростов — по упору края нет, тело не лезет...
+        CHECK(run(f, 0.5f, true, false, saw, false, 4) < 12.0f);
+        CHECK(!saw);
+        // ...а по шагу нава «вверх» лезет, пока касается, и переходит её.
+        CHECK(run(f, 0.5f, true, false, saw, true, 4) > 13.5f);
         CHECK(saw);
     }
 }

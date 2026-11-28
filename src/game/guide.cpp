@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "core/tick.h"  // kSimHz — окно дозора в тиках
 #include "core/wrap.h"
 #include "game/ai.h"      // decider_of — ЧЬЁ это тело (S13.7a)
 #include "game/impact.h"  // kImpactFreeSpeed — из него выведена высота края
@@ -47,7 +48,7 @@ bool steer_off_edge(const SteerGround& ground, const vec3& pos,
 SteerStep steer_to_zone(const ZoneNav& zones, const GravityFrame& gf,
                         const SteerGround& ground, const vec3& pos,
                         const vec3& half, int cx, int cy, int cz, RoomId from,
-                        RoomId target) {
+                        RoomId target, bool climbs) {
     SteerStep out;
     const std::uint8_t d =
         zone_walk_dir(zones, from, target, cx, cy, cz, gf.pull ? gf.axis : -1);
@@ -60,7 +61,20 @@ SteerStep steer_to_zone(const ZoneNav& zones, const GravityFrame& gf,
     // ноль, то есть вести этим шагом нечем. Слепой прямой на цель здесь нет
     // СОЗНАТЕЛЬНО: ровно она была остатком якоря у решётки и стоила §88 нуля
     // прибытий.
+    //
+    // ЛАЗАЮЩЕЕ ТЕЛО (CANON S30) этот шаг ИСПОЛНИТ: держась за стену, оно лезет
+    // вверх со своей скоростью, а горизонтальный шаг следующей клетки заберёт его
+    // за край. Для нелазающего та же ступень — `StepUp`, и заявитель обязан
+    // бросить цель: стоять под ступенькой вечно — поглощающее состояние.
+    // Шаг ВНИЗ вдоль гравитации исполняет сама тяга — им вести тоже нечем, и он
+    // остаётся отказом как был.
     if (d < 6 && (d >> 1) == static_cast<std::uint8_t>(gf.axis)) {
+        // `kNavDir`: чётный — минус оси, нечётный — плюс; «вверх» — по знаку фрейма.
+        const bool up = ((d & 1) != 0) == (gf.upSign > 0);
+        if (climbs && up) {
+            out.up = true;
+            return out;
+        }
         out.fail = SteerFail::StepUp;
         return out;
     }
@@ -104,11 +118,59 @@ GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         const AABB* box = reg.try_get<AABB>(e);
         return box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f};
     };
+    // «ЛЕЗЬ, ЕСЛИ УПЁРСЯ» (CANON S30) — каждому телу, которое этот писатель
+    // ВЕДЁТ ненулевым шагом: лазанье есть способ исполнить шаг, а не отдельное
+    // решение. Упёрлось ли тело — знает физика (упор прошлого подшага); тело без
+    // способности просьбу не исполнит, и ветки под это здесь нет.
+    const auto ask_climb = [&reg](Entity e) {
+        if (Climb* c = reg.try_get<Climb>(e)) c->wants = true;
+    };
     // Непостроенный бейк НЕ останавливает проход, и это отличие от прежних
     // ходоков: заявка вида `Dir` (бегство, погоня, шум) нава не спрашивает
     // вовсе, а `Hold` — тем более. Отказывает только разрешение зоны, и
     // отказывает оно у `zone_walk_dir`, который сам проверяет построенность
     // ([game/zone_nav.h]).
+    // Пул дозора — ДО вида: рождение первого элемента нового рода посреди
+    // обхода дангл'ит указатели живого вида (довод у `steer_pool_warm`).
+    (void)reg.storage<SteerProgress>();
+    const std::uint32_t now = static_cast<std::uint32_t>(tick);
+    // ДОЗОР ХОДА (CANON S30 п.5) — один на тело, мерится только у цели «зона».
+    // Любая иная заявка (стоять, пеленг) меру сбрасывает: возврат к той же зоне
+    // после паузы — новый отсчёт, а не накопленный простой.
+    const auto watch_off = [&reg](Entity e) {
+        if (SteerProgress* p = reg.try_get<SteerProgress>(e)) {
+            p->zone = kNoRoom;
+            p->stalled = false;
+        }
+    };
+    const auto watch_zone = [&](Entity e, const vec3& pos, RoomId zone,
+                                float speed) {
+        SteerProgress& p = reg.get_or_emplace<SteerProgress>(e);
+        if (p.zone != zone) {
+            p = SteerProgress{pos, now, zone, false};
+            return;
+        }
+        if (wrap_dist2(p.ref, pos, kWorldExtent) >=
+            kProgressMetres * kProgressMetres) {
+            p.ref = pos;
+            p.since = now;
+            p.stalled = false;
+            return;
+        }
+        // Мерило — тот способ, которым тело ИСПОЛНЯЕТ шаг сейчас: лезет (отчёт
+        // физики прошлого тика) — скорость лазанья, идёт — шаг заявки. Брать
+        // лазанье у упёршегося, но не лезущего тела значило бы держать его у
+        // стены впятеро дольше, чем нужно, чтобы понять, что хода нет.
+        const Climb* c = reg.try_get<Climb>(e);
+        float slow = speed;
+        if (c != nullptr && c->climbing && c->speed > 0.0f && c->speed < slow)
+            slow = c->speed;
+        if (slow <= 0.0f) return; // заявка без скорости — мерить нечем
+        const float windowTicks =
+            2.0f * kProgressMetres / slow * static_cast<float>(kSimHz);
+        p.stalled = static_cast<float>(now - p.since) > windowTicks;
+        if (p.stalled) ++out.stalled;
+    };
     auto view = reg.view<const Steer, const Transform, Velocity>();
     for (auto e : view) {
         const Transform& tr = view.get<const Transform>(e);
@@ -140,6 +202,7 @@ GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
         }
         Velocity& vel = view.get<Velocity>(e);
         const std::size_t rank = static_cast<std::size_t>(s.rank);
+        if (s.target.kind != TargetKind::Zone) watch_off(e);
         if (s.target.kind == TargetKind::Hold) {
             steer_stop(gf, vel);
             ++out.held;
@@ -171,10 +234,12 @@ GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
                 continue;
             }
             steer_write(gf, vel, unit, s.target.speed);
+            ask_climb(e);
             ++out.led;
             ++out.byRank[rank];
             continue;
         }
+        watch_zone(e, tr.pos, s.target.zone, s.target.speed);
         // Zone: нав по зонам. Зона тела — через дверь с опорой на соседа
         // (клетка центра тела бывает ДЫРКОЙ в разбивке — замер §88: 26 тел на
         // тик из 238 ведомых), «метры → клетка» — одной дверью
@@ -187,7 +252,7 @@ GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
             from == kNoRoom
                 ? SteerStep{vec3{0.0f, 0.0f, 0.0f}, SteerFail::NoRoute}
                 : steer_to_zone(zones, gf, ground, tr.pos, half_of(e), cx, cy,
-                                cz, from, s.target.zone);
+                                cz, from, s.target.zone, steer_climbs(reg, e));
         if (st.fail == SteerFail::Edge) {
             // Заявитель, спросивший ту же дверь с той же землёй, сюда не
             // приходит; пришедший — стоит у края, а не едет на прошлой
@@ -208,7 +273,20 @@ GuideTick guide_step(Registry& reg, const ZoneNav& zones, LayerId layer,
             ++out.unresolved;
             continue;
         }
+        if (st.up) {
+            // ШАГ ВВЕРХ ЛАЗАЮЩЕГО (CANON S30): касательной скорости нет —
+            // держаться за стену и лезть; тягу по оси снимает физика, пока
+            // тело касается мира. Касания нет — просьба ничего не делает, и
+            // тело стоит, а не едет на прошлой скорости.
+            steer_stop(gf, vel);
+            if (Climb* c = reg.try_get<Climb>(e)) c->up = true;
+            ++out.climbUp;
+            ++out.led;
+            ++out.byRank[rank];
+            continue;
+        }
         steer_write(gf, vel, st.dir, s.target.speed);
+        ask_climb(e);
         ++out.led;
         ++out.byRank[rank];
     }

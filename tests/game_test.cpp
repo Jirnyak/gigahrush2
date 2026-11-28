@@ -168,6 +168,7 @@ int g_checks = 0;
 #include "suite_deathcause.inl"  // от чего гибнет толпа — счёт двери смерти
 #include "suite_settle.inl"      // доселение — тело рождается стоящим (CANON S26)
 #include "suite_kray.inl"        // сторож края — тело само не шагает с обрыва
+#include "suite_climb.inl"       // лазанье: дверь по способности, просьбы, дозор хода (S30)
 #include "suite_prebuild.inl"
 #include "suite_lightvis.inl"
 #include "suite_shotsub.inl"
@@ -5721,6 +5722,7 @@ int main() {
     test_deathcause_all();
     test_settle_all();
     test_kray_all();
+    test_climb_all();
     test_prebuild_all();
     test_lightvis_all();
     test_floor_bucket_index();

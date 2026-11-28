@@ -241,6 +241,28 @@ bool touching_tangential(const World& w, const vec3& pos, const vec3& half,
     return false;
 }
 
+// ЕСТЬ ЛИ КУДА ЛЕЗТЬ (CANON S30): лазанье — способ ПЕРЕЙТИ преграду, а не висеть
+// на ней. Спрашивается один раз, в момент упора: поднимаясь прямо вверх атом за
+// атомом, тело не бьётся головой (потолок — некуда) и на какой-то высоте может
+// сдвинуться вперёд по ходу на атом — это край. Дальность — два своих роста
+// вдоль «вверх»: выше без края тело не лезет по упору (вертикаль по шагу нава —
+// другой вход, `Climb::up`). Ход вперёд — нормированный касательный замысел.
+bool ledge_within_reach(const World& w, const vec3& pos, const vec3& half,
+                        const vec3& up, int upComp, const vec3& wishTan) {
+    const float len2 = dot(wishTan, wishTan);
+    if (len2 <= 1e-12f) return false;
+    const vec3 ahead = wishTan * (kVoxelSize / std::sqrt(len2));
+    const float upHalf = axis_of(half, upComp);
+    const int reach = static_cast<int>(std::ceil(4.0f * upHalf / kVoxelSize));
+    for (int k = 1; k <= reach; ++k) {
+        const vec3 lifted = pos + up * (static_cast<float>(k) * kVoxelSize +
+                                        kContactSkin);
+        if (aabb_overlaps_solid(w, lifted, half)) return false; // потолок
+        if (!aabb_overlaps_solid(w, lifted + ahead, half)) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 void physics_step(Registry& reg, LevelStack& stack, float dt,
@@ -352,7 +374,7 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             if (climb != nullptr) {
                 if (s == 0) climb->climbing = false;
                 if (hasGravity && climb->speed > 0.0f &&
-                    ((climb->wants && climb->pressing) ||
+                    ((climb->wants && climb->pressing && climb->ledge) ||
                      (climb->up &&
                       touching_tangential(w, tr.pos, half, upComp)))) {
                     climbNow = true;
@@ -368,6 +390,11 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
 
             auto* g = reg.try_get<GravityAffected>(e);
             const bool canStep = g && g->grounded && !climbNow;
+
+            // Касательный ход, который тело ХОТЕЛО сделать в этом подшаге, —
+            // мера упора лазанья ниже (до свипов: удар обнулит скорость).
+            const vec3 posBefore = tr.pos;
+            const vec3 wishTan = (vel.v - up * dot(vel.v, up)) * h;
 
             // Integrate + collide, one axis at a time; grounded walkers step
             // over single sub-voxel atoms instead of snagging on them.
@@ -400,10 +427,30 @@ void physics_step(Registry& reg, LevelStack& stack, float dt,
             // которую взял `sweep_axis_walk`, упором не считается: удар он
             // возвращает только если подъём на атом хода не дал. Просьбы
             // гаснут после последнего подшага тика — писатель ставит их заново.
+            //
+            // УПОР — это когда мир СЪЕЛ ход, а не когда тело задело стену:
+            // идущее вдоль стены тело бьёт её одной осью и скользит другой, и
+            // лезть ему незачем. Упор ⟺ удар по касательной И сделано меньше
+            // половины задуманного касательного хода. Половина — граница, на
+            // которой скользящее под 45° тело (cos 45° ≈ 0.71 хода) ещё идёт, а
+            // упёршееся почти в лоб — уже лезет.
             if (climb != nullptr) {
-                climb->pressing = (upComp != 0 && hitX) ||
-                                  (upComp != 1 && hitY) ||
-                                  (upComp != 2 && hitZ);
+                const bool tanHit = (upComp != 0 && hitX) ||
+                                    (upComp != 1 && hitY) ||
+                                    (upComp != 2 && hitZ);
+                const vec3 moved{wrap_delta_f(posBefore.x, tr.pos.x, kWorldExtent),
+                                 wrap_delta_f(posBefore.y, tr.pos.y, kWorldExtent),
+                                 wrap_delta_f(posBefore.z, tr.pos.z, kWorldExtent)};
+                const vec3 movedTan = moved - up * dot(moved, up);
+                const bool wasPressing = climb->pressing;
+                climb->pressing =
+                    tanHit && dot(movedTan, movedTan) < 0.25f * dot(wishTan, wishTan);
+                // Край ищется на ФРОНТЕ упора и держится, пока упор длится:
+                // лезущее тело по пути вверх край не перемеряет.
+                if (!climb->pressing) climb->ledge = false;
+                else if (!wasPressing)
+                    climb->ledge = ledge_within_reach(w, tr.pos, half, up,
+                                                      upComp, wishTan);
                 if (s == steps - 1) {
                     climb->wants = false;
                     climb->up = false;

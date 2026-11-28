@@ -266,7 +266,8 @@ void claimant_learns_from_the_same_door() {
         tr.pos.x = x;
         return steer_to_zone(zn, gf, ground, tr.pos, half, cell_of_metres(x),
                              cell_of_metres(tr.pos.y), cell_of_metres(tr.pos.z),
-                             static_cast<RoomId>(1), static_cast<RoomId>(2));
+                             static_cast<RoomId>(1), static_cast<RoomId>(2),
+                             /*climbs=*/false);
     };
     CHECK(step_at(12.0f * kCellSize).fail == SteerFail::None);
     const SteerStep brink = step_at(15.0f * kCellSize - half.x);
@@ -276,7 +277,7 @@ void claimant_learns_from_the_same_door() {
     CHECK(steer_to_zone(zn, gf, SteerGround{}, tr.pos, half,
                         cell_of_metres(tr.pos.x), cell_of_metres(tr.pos.y),
                         cell_of_metres(tr.pos.z), static_cast<RoomId>(1),
-                        static_cast<RoomId>(2))
+                        static_cast<RoomId>(2), /*climbs=*/false)
               .fail == SteerFail::None);
 
     // ПИСАТЕЛЬ И ЗАЯВКА ВИДА «ЗОНА». Заявитель без земли (стенд, чужой

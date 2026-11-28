@@ -490,7 +490,7 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
         const SteerStep st = steer_to_zone(
             zones, gf, ground, tr.pos,
             box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f}, cx, cy, cz,
-            myZone, wt.zone);
+            myZone, wt.zone, steer_climbs(reg, e));
         if (st.fail == SteerFail::Edge) {
             // ЗА ШАГОМ ОБРЫВ, падение с которого ранит. Нав по зонам цену
             // обрыва знает только внутри зоны; сюда его привёл слепой к
@@ -502,7 +502,10 @@ WanderTick wander_step(Registry& reg, const MacroGrid& grid, NpcPool& pool,
             stop();
             continue;
         }
-        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::StepUp) {
+        // ДОЗОР ХОДА (CANON S30 п.5) — тот же исход: тело упёрлось, шаг
+        // неисполним, цель снимается со стаггером.
+        if (st.fail == SteerFail::NoRoute || st.fail == SteerFail::StepUp ||
+            steer_stalled(reg, e, wt.zone)) {
             // МАРШРУТА НЕТ — другая компонента связности либо поле соседки не
             // покрывает клетку. СТУПЕНЬКА И ЕСТЬ ВЫХОД ИЗ ЗОНЫ: наряд и дело
             // здесь отдают тело вандеру и ОСТАВЛЯЮТ цель, а вандеру отдавать

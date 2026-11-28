@@ -2,6 +2,7 @@
 
 #include "game/body_pose.h" // BodyPlan — план тела при рождении (S28.2)
 #include "game/equip.h"    // Equipped — the empty decision cells on embodiment
+#include "game/guide.h"    // kWalkSpeedMps, kHumanClimbOfWalk — лазанье при рождении (S30)
 #include "world/clearance.h"  // face_clearance_at — закон пробы стены
 #include "world/macro_grid.h"
 #include "game/faction.h"
@@ -87,6 +88,12 @@ Entity embody(Registry& reg, NpcPool& pool, NpcId id, LayerId layer) {
     // that used to sit here re-used the threshold as the impulse and zeroed
     // the derived margin — a live player landed exactly on the bleed line.
     reg.emplace<Jump>(e, Jump{});
+    // ЛАЗАНЬЕ (CANON S30) — способность при рождении, той же дверью, что
+    // прыжок: человек лезет долей своей ходьбы. Исполнит её физика, попросит
+    // писатель ведения (или ввод носителя камеры — тот же флажок).
+    Climb climb;
+    climb.speed = kWalkSpeedMps * kHumanClimbOfWalk;
+    reg.emplace<Climb>(e, climb);
 
     // Render skin: a faction-tinted box the size of the collider. Cosmetic only
     // (the body pass reads it; the sim never does), so the whole embodied crowd
