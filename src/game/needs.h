@@ -105,6 +105,8 @@ class World;
 
 namespace giga::game {
 
+struct FloorRooms;
+
 inline constexpr float kNeedMax = 100.0f;
 
 // Drain per REAL second (`needs.ts:22-27`).
@@ -132,6 +134,9 @@ inline constexpr float kDehydrationHpPerSec = 0.5f;   // water <= 0
 // `main.ts:3777-3786`: flat, binary, no ramp.
 inline constexpr float kSleepExhaustedAt = 10.0f;
 inline constexpr float kSleepExhaustedSpeedScale = 0.5f;
+
+inline constexpr float kHermeticSleepAmbientPerSec = 0.08f; // net +0.03/s в гермоукрытии (компенсирует kSleepDrainPerSec 0.05)
+inline constexpr float kHermeticHealAmbientPerSec  = 0.05f; // 1 HP за 20 сек в стерильном боксе
 
 // Starting values, randomised per body (`names.ts:316-318`). The spread is the
 // point: the body you wake up in decides how long your first trip can be.
@@ -450,7 +455,8 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      class AiMemory* mem = nullptr, double now = 0.0,
                      EventBus* bus = nullptr, std::uint64_t tick = 0,
                      World* world = nullptr,
-                     std::vector<std::uint32_t>* excreted = nullptr);
+                     std::vector<std::uint32_t>* excreted = nullptr,
+                     const FloorRooms* rooms = nullptr);
 
 // МОЧА — МАТЕРИЯ МИРА, А НЕ ПЯТНО (решение владельца 2026-11-14: «по замыслу
 // просто создаётся в области писи — или для начала просто в точке тела —

@@ -778,14 +778,27 @@ static void test_floor_gen() {
     generate_floor(c, 6, floor_spec(FloorKind::Residential), 1u);
     CHECK(a.grid().types() != c.grid().types());
 
-    // Every kind dispatches to the same geometry module, so two kinds given the
-    // same (number, seed) build IDENTICAL grids — kind themes content, not
-    // geometry. A second module would claim its own numbers, not a kind branch.
-    World res, ind;
+    // PadicTheme themes both materials and structural details by FloorKind, so
+    // distinct kinds produce distinct grids and materials at the same (number, seed).
+    World res, ind, com, der;
     generate_floor(res, 0, floor_spec(FloorKind::Residential), 3u);
     generate_floor(ind, 0, floor_spec(FloorKind::Industrial), 3u);
-    CHECK(res.grid().types() == ind.grid().types());
+    generate_floor(com, 0, floor_spec(FloorKind::Commercial), 3u);
+    generate_floor(der, 0, floor_spec(FloorKind::Derelict), 3u);
+    auto count_mat = [](const World& w, CellType mat) {
+        std::size_t n = 0;
+        for (CellType t : w.grid().types())
+            if (t == mat) ++n;
+        return n;
+    };
+    CHECK(count_mat(res, kMatFactoryWall) == 0u);
+    CHECK(count_mat(ind, kMatFactoryWall) > 0u);
+    CHECK(count_mat(res, kMatSlabTan) == 0u);
+    CHECK(count_mat(com, kMatSlabTan) > 0u);
+    CHECK(count_mat(res, kMatRust) == 0u);
+    CHECK(count_mat(der, kMatRust) > 0u);
     CHECK(solid_cells(res) > 0);
+    CHECK(solid_cells(ind) > 0);
 
     // Fixed lattice ([torus-nav-baking]): the 16 shaft columns are carved to air
     // through the FULL height (Z wraps, so this also links top -> 0), the ground

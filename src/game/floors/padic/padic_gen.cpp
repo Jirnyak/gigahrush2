@@ -39,6 +39,7 @@
 // layers, varying per storey.
 #include "core/rng.h"
 #include "game/floors/padic/padic.h"
+#include "game/floors/padic/padic_theme.h"
 
 #include "game/floor_gen.h"
 #include "game/room.h"          // room_declare — модуль объявляет свои комнаты (S12.1)
@@ -195,10 +196,10 @@ void fill_mat(Plan& p, const Rect& r, std::uint8_t mat, bool interiorOnly) {
 // (lino: toilet + kitchen niche), and punch the entry door on a corridor-facing
 // perimeter edge of the block.
 void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
-                       const Rect& block) {
+                       const Rect& block, const PadicTheme& theme) {
     std::vector<Rect> rooms;
     bsp(p, rng, apt, 5, /*doors=*/true, rooms);
-    // Two smallest rooms go lino. Plain selection sort over a handful.
+    // Two smallest rooms go lino (or theme.matFloorAlt). Plain selection sort over a handful.
     // Тот же выбор даёт листьям РОЛИ (rooms-object C): pass 0 — санузел,
     // pass 1 — кухонная ниша, остаток — жилые. Роль рождается там же, где
     // рождается материал пола, — план знает свои комнаты и объявляет их.
@@ -210,7 +211,7 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
                            (rooms[i].y1 - rooms[i].y0);
             if (a < bestArea) { bestArea = a; best = i; }
         }
-        fill_mat(p, rooms[best], kMatLino, /*interiorOnly=*/true);
+        fill_mat(p, rooms[best], static_cast<std::uint8_t>(theme.matFloorAlt), /*interiorOnly=*/true);
         p.rooms.push_back({rooms[best],
                            pass == 0 ? kLeafToilet : kLeafKitchen});
         rooms.erase(rooms.begin() + static_cast<long>(best));
@@ -239,8 +240,9 @@ void furnish_apartment(Plan& p, std::uint32_t& rng, const Rect& apt,
 // the geometry was generated from. (A second "door seed" once existed and put
 // walls and doors in two different buildings — 1302 of ~26k doorways survived
 // the coincidence. One floor, one seed.)
-void build_plan(Plan& p, unsigned seed, int number) {
-    p.floorMat.assign(static_cast<std::size_t>(kMacroDim) * kMacroDim, kMatLino);
+void build_plan(Plan& p, unsigned seed, int number, const PadicTheme& theme) {
+    p.floorMat.assign(static_cast<std::size_t>(kMacroDim) * kMacroDim,
+                      static_cast<std::uint8_t>(theme.matFloorAlt));
     p.grate.assign(p.floorMat.size(), 0);
     p.opening.assign(p.floorMat.size(), 0);
     p.blockOf.assign(p.floorMat.size(), 0xFF);
@@ -271,7 +273,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
                 static_cast<std::uint8_t>(bj * kLatticeDim + bi);
             for (int y = block.y0; y <= block.y1; ++y)
                 for (int x = block.x0; x <= block.x1; ++x) {
-                    p.floorMat[p2(x, y)] = kMatParquet;
+                    p.floorMat[p2(x, y)] = static_cast<std::uint8_t>(theme.matFloorMain);
                     p.blockOf[p2(x, y)] = bIdx;
                 }
             // Perimeter walls.
@@ -310,7 +312,7 @@ void build_plan(Plan& p, unsigned seed, int number) {
             // Apartments (solid between), then rooms (doored) inside each.
             std::vector<Rect> apts;
             bsp(p, rng, main, 9, /*doors=*/false, apts);
-            for (const Rect& a : apts) furnish_apartment(p, rng, a, block);
+            for (const Rect& a : apts) furnish_apartment(p, rng, a, block, theme);
         }
     }
 }
@@ -362,7 +364,7 @@ void put_sub(MacroGrid& g, SubField<CellType>& sm, int cx, int cy, int baseZ,
 
 // The sandwich of one storey, at cell layer zc (== b+2, or 127 for the attic).
 void stamp_sandwich(MacroGrid& g, SubField<CellType>& sm, const Plan& p,
-                    int zc) {
+                    int zc, const PadicTheme& theme) {
     for (int y = 0; y < kMacroDim; ++y) {
         for (int x = 0; x < kMacroDim; ++x) {
             const std::size_t i2 = p2(x, y);
@@ -377,19 +379,24 @@ void stamp_sandwich(MacroGrid& g, SubField<CellType>& sm, const Plan& p,
                 // снесённого `get_cell_hazard`, который бил током независимо
                 // от щитка (разбор в [combat.h], снос 2026-09-23). Планировка
                 // не изменилась ни на клетку: `p.grate` — политика модуля.
-                put_bits(g, sm, x, y, zc, kFloorW, kGrateBars, kMatTread);
+                put_bits(g, sm, x, y, zc, kFloorW, kGrateBars, theme.matGrate);
                 continue;
             }
             put_bits(g, sm, x, y, zc, kFloorW, kAllBits,
                      static_cast<CellType>(mat));
-            put_bits(g, sm, x, y, zc, kCeilW, kAllBits, kMatPlaster);
+            put_bits(g, sm, x, y, zc, kCeilW, kAllBits, theme.matCeiling);
         }
     }
 }
 
 // Thin walls, floor to ceiling (22 sub-voxels), with door/entry gaps at
 // z = b..b+1 and the lintel kept at b+2.
-void stamp_walls(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int b) {
+void stamp_walls(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int b,
+                 const PadicTheme& theme, std::uint32_t storeyHash) {
+    const unsigned shopThresh =
+        theme.shopfrontProb > 0.0f ? static_cast<unsigned>(theme.shopfrontProb * 1000.0f) : 0u;
+    const unsigned breachThresh =
+        theme.wallBreachProb > 0.0f ? static_cast<unsigned>(theme.wallBreachProb * 1000.0f) : 0u;
     for (const PlanWall& w : p.walls) {
         const std::uint64_t pat = w.axis == 0 ? kWallX34 : kWallY34;
         for (int k = 0; k < w.len; ++k) {
@@ -397,13 +404,42 @@ void stamp_walls(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int b) {
             const int y = w.axis == 0 ? wrap_macro(w.a0 + k) : w.c;
             const bool gap = p.opening[p2(x, y)] != 0;
             if (!gap) {
-                for (int wz = 0; wz < 8; ++wz) {
-                    put_bits(g, sm, x, y, b, wz, pat, kMatPlaster);
-                    put_bits(g, sm, x, y, b + 1, wz, pat, kMatPlaster);
+                const std::uint32_t ch =
+                    hash_u32(storeyHash ^ (static_cast<std::uint32_t>(x) * 73856093u) ^
+                             (static_cast<std::uint32_t>(y) * 19349663u));
+                const bool breached = breachThresh > 0u && ((ch % 1000u) < breachThresh);
+                if (!breached) {
+                    const bool glazed = shopThresh > 0u && ((ch % 1000u) < shopThresh);
+                    for (int wz = 0; wz < 8; ++wz) {
+                        const CellType matB = (glazed && wz >= 2) ? kMatGlass : theme.matWall;
+                        const CellType matB1 = (glazed && wz <= 5) ? kMatGlass : theme.matWall;
+                        put_bits(g, sm, x, y, b, wz, pat, matB);
+                        put_bits(g, sm, x, y, b + 1, wz, pat, matB1);
+                    }
                 }
             }
             for (int wz = 0; wz < 6; ++wz)
-                put_bits(g, sm, x, y, b + 2, wz, pat, kMatPlaster);
+                put_bits(g, sm, x, y, b + 2, wz, pat, theme.matWall);
+        }
+    }
+    if (theme.pillarSpacing > 0) {
+        constexpr std::uint64_t kPillarMask = 0x0000001818000000ull; // 2x2 центр субсетки
+        for (int y = 0; y < kMacroDim; ++y) {
+            for (int x = 0; x < kMacroDim; ++x) {
+                if ((x % theme.pillarSpacing) != 4 || (y % theme.pillarSpacing) != 4)
+                    continue;
+                const std::size_t i2 = p2(x, y);
+                if (p.blockOf[i2] == 0xFF || p.opening[i2] != 0 || p.floorMat[i2] == 0)
+                    continue;
+                if (g.cell(x, y, b) != kCellAir || g.cell(x, y, b + 1) != kCellAir)
+                    continue;
+                for (int wz = 0; wz < 8; ++wz) {
+                    put_bits(g, sm, x, y, b, wz, kPillarMask, kMatConcrete);
+                    put_bits(g, sm, x, y, b + 1, wz, kPillarMask, kMatConcrete);
+                }
+                for (int wz = 0; wz < 6; ++wz)
+                    put_bits(g, sm, x, y, b + 2, wz, kPillarMask, kMatConcrete);
+            }
         }
     }
 }
@@ -413,7 +449,7 @@ void stamp_walls(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int b) {
 // the entry strip stamped into the sandwich layer. Hash-chosen flights are
 // buried under rubble.
 void stamp_stair(MacroGrid& g, SubField<CellType>& sm, const PlanStair& st,
-                 int b, std::uint32_t storeyHash) {
+                 int b, std::uint32_t storeyHash, const PadicTheme& theme) {
     const int X = st.x, Y = st.y;
     // Flight A (row Y, sub rows 0..7), rising +x: step i tops out at level i.
     for (int i = 1; i <= 11; ++i) {
@@ -421,33 +457,36 @@ void stamp_stair(MacroGrid& g, SubField<CellType>& sm, const PlanStair& st,
             const int SX = 5 + 2 * (i - 1) + dx;
             for (int SY = 0; SY < 8; ++SY)
                 for (int L = i - 2; L < i; ++L)
-                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
+                    put_sub(g, sm, X, Y, b, SX, SY, L, theme.matStair);
         }
     }
     // Mid landing: both rows, level 12 top, 2/8 thick.
     for (int SX = 27; SX < 32; ++SX)
         for (int SY = 0; SY < 16; ++SY)
             for (int L = 10; L < 12; ++L)
-                put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
+                put_sub(g, sm, X, Y, b, SX, SY, L, theme.matStair);
     // Flight B (row Y+1, sub rows 8..15), rising -x from the mid landing.
     for (int k = 1; k <= 11; ++k) {
         for (int dx = 0; dx < 2; ++dx) {
             const int SX = 27 - 2 * k + dx;
             for (int SY = 8; SY < 16; ++SY)
                 for (int L = 10 + k; L < 12 + k; ++L)
-                    put_sub(g, sm, X, Y, b, SX, SY, L, kMatConcrete);
+                    put_sub(g, sm, X, Y, b, SX, SY, L, theme.matStair);
         }
     }
     // Entry strip: the shared landing at the shaft mouth — this storey's slab
     // at b+2 is the level-24 arrival of THIS storey's climb and the departure
     // landing of the storey above. Concrete both layers: uniform, no page.
     for (int row = 0; row < 2; ++row) {
-        put_bits(g, sm, X, Y + row, b + 2, kCeilW, kEntryX04, kMatConcrete);
-        put_bits(g, sm, X, Y + row, b + 2, kFloorW, kEntryX04, kMatConcrete);
+        put_bits(g, sm, X, Y + row, b + 2, kCeilW, kEntryX04, theme.matStair);
+        put_bits(g, sm, X, Y + row, b + 2, kFloorW, kEntryX04, theme.matStair);
     }
-    // Procedural blockage: ~1 flight in 7 is buried. A 2 m stepped rubble mound
-    // over the middle steps — impassable without carving through it.
-    if ((storeyHash & 7u) == 0u) {
+    // Procedural blockage: ~1 flight in 7 is buried by default, scaled by theme.stairBuryProb.
+    const bool bury = (theme.stairBuryProb == 0.125f)
+                          ? ((storeyHash & 7u) == 0u)
+                          : ((storeyHash % 1000u) <
+                             static_cast<unsigned>(theme.stairBuryProb * 1000.0f));
+    if (bury) {
         const bool onA = (storeyHash & 8u) == 0u;
         for (int i = 4; i <= 8; ++i) {
             for (int dx = 0; dx < 2; ++dx) {
@@ -465,10 +504,20 @@ void stamp_stair(MacroGrid& g, SubField<CellType>& sm, const PlanStair& st,
 // Ragged holes: unions of discs at sub-voxel resolution punched through both
 // sandwich layers — "не просто квадраты". Varies per storey by hash.
 void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
-                 std::uint32_t h) {
+                 std::uint32_t h, const PadicTheme& theme) {
+    const bool exactDefault =
+        theme.holeProb == 0.40f && theme.holeMinRadius == 5 && theme.holeMaxRadius == 12;
+    const unsigned holeThresh = static_cast<unsigned>(theme.holeProb * 1000.0f);
+    const int radSpan = (theme.holeMaxRadius > theme.holeMinRadius)
+                            ? (theme.holeMaxRadius - theme.holeMinRadius + 1)
+                            : 1;
     for (int blk = 0; blk < kLatticeDim * kLatticeDim; ++blk) {
         std::uint32_t r = hash_u32(h ^ (0xB10Cu + static_cast<std::uint32_t>(blk)));
-        if ((r % 5u) >= 2u) continue; // 40% of blocks per storey get one hole
+        if (exactDefault) {
+            if ((r % 5u) >= 2u) continue; // 40% of blocks per storey get one hole
+        } else {
+            if ((r % 1000u) >= holeThresh) continue;
+        }
         const int bi = blk % kLatticeDim, bj = blk / kLatticeDim;
         const int bx = kCorr0 + bi * kLatticeSpacing + 2;
         const int by = kCorr0 + bj * kLatticeSpacing + 2;
@@ -488,7 +537,10 @@ void punch_holes(MacroGrid& g, SubField<CellType>& sm, const Plan& p, int zc,
             r = hash_u32(r);
             d[k].y = cys + static_cast<int>(r % 17u) - 8;
             r = hash_u32(r);
-            d[k].r = 5 + static_cast<int>(r % 8u);
+            d[k].r = exactDefault
+                         ? (5 + static_cast<int>(r % 8u))
+                         : (theme.holeMinRadius +
+                            static_cast<int>(r % static_cast<unsigned>(radSpan)));
             const int e = (k == 0 ? 0 : 8) + d[k].r;
             if (e > reach) reach = e;
         }
@@ -591,10 +643,11 @@ void padic_declare_rules(World& world, int /*number*/, const FloorSpec& /*spec*/
 // snapshot carries geometry only. Positions come from the module's own lattice
 // and plan, not from reading the grid, so this is deterministic in
 // (seed, number) exactly like the geometry and the doorways are.
-void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
+void padic_apply_rules(World& world, int number, const FloorSpec& spec,
                        unsigned seed) {
+    const PadicTheme& theme = padic_theme_for(spec.kind);
     Plan p;
-    build_plan(p, seed, number);
+    build_plan(p, seed, number, theme);
 
     // ВОДА = МАТЕРИЯ автомата (fluid-поле УМЕРЛО, чистка 2026-08-24 «не
     // щадя»): ямы наливаются water-атомами ПО УРОВНЮ снизу вверх — плоская
@@ -642,6 +695,7 @@ void padic_apply_rules(World& world, int number, const FloorSpec& /*spec*/,
 
 void generate_padic_floor(World& world, int number, const FloorSpec& spec,
                           unsigned seed) {
+    const PadicTheme& theme = padic_theme_for(spec.kind);
     MacroGrid& g = world.grid();
     SubField<CellType>& sm =
         world.subfields().get_or_create<CellType>(kSubMaterialName);
@@ -657,7 +711,7 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
             for (int x = 0; x < kMacroDim; ++x) g.clear_cell(x, y, z);
 
     Plan p;
-    build_plan(p, seed, number);
+    build_plan(p, seed, number, theme);
     // Every sandwich cell will page (ceiling != floor material by design).
     sm.reserve_pages(700000);
 
@@ -667,23 +721,24 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
 
     for (int b = 0; b <= kLastBase; b += kStorey) {
         const std::uint32_t sh = hash_u32(floorSalt ^ static_cast<std::uint32_t>(b));
-        stamp_sandwich(g, sm, p, b + 2);
-        punch_holes(g, sm, p, b + 2, sh);
-        stamp_walls(g, sm, p, b);
+        stamp_sandwich(g, sm, p, b + 2, theme);
+        punch_holes(g, sm, p, b + 2, sh, theme);
+        stamp_walls(g, sm, p, b, theme, sh);
         for (std::size_t s = 0; s < p.stairs.size(); ++s)
             stamp_stair(g, sm, p.stairs[s], b,
-                        hash_u32(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))));
+                        hash_u32(sh ^ (0x57A12u + static_cast<std::uint32_t>(s))),
+                        theme);
     }
     // Attic: the 2-cell crawl whose sandwich is storey 0's floor. No holes —
     // the arrival floor stays solid. Stair entry strips so the ground-storey
     // landings have something to stand on.
-    stamp_sandwich(g, sm, p, kMacroDim - 1);
+    stamp_sandwich(g, sm, p, kMacroDim - 1, theme);
     for (const PlanStair& st : p.stairs)
         for (int row = 0; row < 2; ++row) {
             put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kCeilW, kEntryX04,
-                     kMatConcrete);
+                     theme.matStair);
             put_bits(g, sm, st.x, st.y + row, kMacroDim - 1, kFloorW, kEntryX04,
-                     kMatConcrete);
+                     theme.matStair);
         }
 
     stamp_lattice(g, sm, number);
@@ -694,7 +749,7 @@ void generate_padic_floor(World& world, int number, const FloorSpec& spec,
 std::uint32_t padic_doorways(int number, unsigned seed,
                              std::vector<Doorway>& out) {
     Plan p;
-    build_plan(p, seed, number);
+    build_plan(p, seed, number, padic_theme_for(FloorKind::Padic));
     std::uint32_t n = 0;
     for (int b = 0; b <= kLastBase; b += kStorey)
         for (const Doorway& d : p.doors) {
@@ -713,34 +768,15 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out,
     // объявление перештамповывается на каждом входе (generate И restore, закон
     // масок S18), порядок обхода детерминирован — он и есть источник
     // устойчивости RoomId между сессиями.
+    const PadicTheme& theme =
+        padic_theme_for(spec != nullptr ? spec->kind : FloorKind::Padic);
     Plan p;
-    build_plan(p, seed, number);
+    build_plan(p, seed, number, theme);
 
-    // ОБЪЯВЛЕННОЕ предложение по роли листа (S12.4: неразрушимая часть —
-    // работает с генерации, до всякой расстановки). Шкала — референсная
-    // 8..40 ([rooms-object.md] §разведка): жилая спать 30 — канонический
-    // пример S13.3 («своя жилая комната: объявлено 30»); санузел сортир 20 и
-    // ниша есть 12 — вполсилы от полноценного оснащения (полное даёт проп,
-    // S12.3); кладовка хранить 15 — полка без ящика хранит хуже склада.
-    std::int16_t declared[4][kVerbCount] = {};
-    declared[kLeafDwelling][kVerbSleep] = 30;
-    declared[kLeafToilet][kVerbToilet] = 20;
-    declared[kLeafKitchen][kVerbEat] = 12;
-    declared[kLeafStrip][kVerbStore] = 15;
-    // ВОДА — ОБЪЯВЛЕННОЕ (водопровод есть архитектура, S12.4), и те же числа,
-    // что у хрущей: кухонный кран 14, сортирный 10. Замер `--action nuzhdy`
-    // на этаже 0 дал жажде 17 комнат из 14742 — и те ОСНАЩЕНИЕМ, то есть
-    // бутылками в ящиках, а не водопроводом; 162 тела из 419 при этом хотели
-    // пить. Жажда падает первой по построению ([game/needs.h]).
-    declared[kLeafKitchen][kVerbDrink] = 14;
-    declared[kLeafToilet][kVerbDrink] = 10;
-    // Гермокласс — решение МОДУЛЯ (S12.1). ВЕРДИКТ ВЛАДЕЛЬЦА 2026-08-29
-    // (плейтест: «дверь не ломается — точно баг»): жилой фонд падика — НЕ
-    // гермозоны. Прежняя разметка (наследие таксономии Living) вешала
-    // door_hermetic (65535 = неразрушимо МАТЕРИАЛОМ, S17) на каждую из
-    // ~15k квартирных дверей — весь этаж стоял за неломаемыми полотнами.
-    // Квартирные двери теперь сталь 384: ломаются упорным карвом, дольше
-    // стены. Гермотег остаётся настоящим гермозонам (гермолобби blame).
+    // ОБЪЯВЛЕННОЕ предложение по роли листа — из PadicTheme (по видам этажей:
+    // жилые, торговые, промышленные, заброшенные и фрактальный падик).
+    // Гермокласс — решение МОДУЛЯ (S12.1): жилой/пром фонд падика — НЕ
+    // гермозоны.
     const std::uint16_t tags[4] = {0, 0, 0, 0};
 
     std::uint32_t n = 0;
@@ -762,7 +798,7 @@ std::uint32_t padic_rooms(int number, unsigned seed, FloorRooms& out,
             const std::uint16_t owner =
                 floor_room_owner(spec, seed, number, n, tag);
             if (room_declare(out, &box, 1, tag, owner,
-                             declared[pr.leaf]) != kNoRoom)
+                             theme.affordances.d[pr.leaf]) != kNoRoom)
                 ++n;
         }
     return n;

@@ -2807,7 +2807,10 @@ if(GIGA_BUILD_TESTS)
         #     света (round-trip, ключ, порча, MISS/HIT);
         #   - `suite_rooms_object.inl` (+17): `Room::owner` из `FloorSpec::factionMix`;
         #   - `suite_rpg.inl` + `suite_utilai.inl` (+63): `capability` + `Perception`.
-        PASS_REGULAR_EXPRESSION "game_test: 245294 checks, 0 failures")
+        # 245294 -> 245305 (+11, 2026-11-28):
+        #   - `suite_needs.inl` (+5): `recovering_ambient_hermetic()` (kRoomTagHermetic + serve_holding);
+        #   - `game_test.cpp` (+6): `test_floor_gen()` дифференциация материалов и геометрии через `PadicTheme`.
+        PASS_REGULAR_EXPRESSION "game_test: 245305 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

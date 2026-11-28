@@ -9428,7 +9428,8 @@ int main(int argc, char** argv) {
                 needs = game::needs_step(reg, pool, activeLayer, kSimDt,
                                          &aiMem, simNow, &bus, simTick,
                                          &stack.layer(activeLayer),
-                                         &excretedCells);
+                                         &excretedCells,
+                                         &floorRooms);
                 prof_add(kProfNeeds, profNeedsT0);
                 needsHpLost += needs.hpLost;
                 voidPuddlesTotal += needs.puddles;

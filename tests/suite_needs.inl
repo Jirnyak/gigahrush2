@@ -880,6 +880,30 @@ void involuntary_relief_is_a_deed() {
     CHECK(dirty.empty());
 }
 
+static void recovering_ambient_hermetic() {
+    Rig rig;
+    rig.build(50);
+    rig.needs() = full_clock();
+    rig.needs().sleep = 40.0f;
+    rig.pool.max_hp(rig.id) = 100;
+    rig.pool.hp(rig.id) = 50;
+
+    FloorRooms fr;
+    rooms_reset(fr);
+    const RoomBox b{0, 0, 0, 10, 10, 10};
+    const RoomId rid = room_declare(fr, &b, 1, kRoomTagHermetic, 0);
+    CHECK(rid != kNoRoom);
+
+    const NeedsTick tick1 = needs_step(rig.reg, rig.pool, 0, 1.0f, nullptr,
+                                       0.0, nullptr, 0u, nullptr, nullptr, &fr);
+    CHECK(tick1.recovering == 1u);
+    CHECK(rig.needs().sleep > 40.0f);
+    CHECK(rig.needs().hpBank > 0.0f);
+
+    const NeedsTick tick2 = needs_step(rig.reg, rig.pool, 0, 1.0f);
+    CHECK(tick2.recovering == 0u);
+}
+
 } // namespace needs_test
 
 static void test_needs_all() {
@@ -893,4 +917,5 @@ static void test_needs_all() {
     needs_test::survives_the_body_swap();
     needs_test::the_whole_floor_lives_on_one_clock();
     needs_test::involuntary_relief_is_a_deed();
+    needs_test::recovering_ambient_hermetic();
 }
