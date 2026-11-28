@@ -262,8 +262,8 @@ float noise_distance(const Noise& n, const vec3& pos) {
 }
 
 bool noise_audible(const Noise& n, const vec3& pos, float hearingMult) {
-    if (n.id == 0) return false;
-    const float r = n.radius * (hearingMult > 0.0f ? hearingMult : 1.0f);
+    if (n.id == 0 || hearingMult <= 0.0f) return false;
+    const float r = n.radius * hearingMult;
     return noise_distance(n, pos) <= r;
 }
 
@@ -271,10 +271,10 @@ const Noise* loudest_heard(const NoiseField& field, LayerId layer, const vec3& p
                            float hearingMult, std::uint8_t minSeverity,
                            std::uint32_t ignoreActor, float* outDist) {
     if (outDist) *outDist = 0.0f;
-    if (field.quiet()) return nullptr;
+    if (field.quiet() || hearingMult <= 0.0f) return nullptr;
     if (layer > kNoiseLayerMax) return nullptr;
     const std::uint8_t wantLayer = static_cast<std::uint8_t>(layer);
-    const float mult = hearingMult > 0.0f ? hearingMult : 1.0f;
+    const float mult = hearingMult;
 
     const Noise* best = nullptr;
     float bestScore = 0.0f;

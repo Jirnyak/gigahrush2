@@ -17,6 +17,7 @@
 #include "game/equip.h"       // Equipped, equip_item — the decision the pass writes
 #include "game/faction_relations.h" // FactionRelations, nearest_faction_foe, kFeudRadius
 #include "game/hunt.h"              // fill_npc_bins_8m
+#include "game/noise.h"             // kNoiseSeverityMax
 #include "game/patrol.h"            // PatrolPlan, kPatrolSalt/LegMetres/RepickCooldown
 #include "game/perceive.h"          // Senses — воспринятые враги без сквозного видения
 #include "game/ranged_table.h"      // equipped_ranged — armed check in Perception
@@ -791,6 +792,11 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             if (const Senses* sen = reg.try_get<Senses>(e)) {
                 p.visibleHostiles = static_cast<float>(sen->visible);
                 p.threatDistance = sen->foeDist;
+                if (sen->heardSev > 0u) {
+                    const float heard = static_cast<float>(sen->heardSev) /
+                                        static_cast<float>(kNoiseSeverityMax);
+                    p.gunfire = heard > 1.0f ? 1.0f : heard;
+                }
                 if (sen->foe != entt::null && reg.valid(sen->foe) &&
                     !reg.any_of<Dead, Corpse>(sen->foe)) {
                     foeEnt = sen->foe;
@@ -926,6 +932,32 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
                     dir = away * (1.0f / std::sqrt(d2));
                     owned = true;
                     viaMemory = true;
+                }
+            }
+            // Live visible/sensed foe escape fallback when both danger field
+            // gradient and danger memory are flat/empty.
+            if (!owned) {
+                if (const Senses* sen = reg.try_get<Senses>(e);
+                    sen != nullptr && sen->foe != entt::null &&
+                    reg.valid(sen->foe) &&
+                    !reg.any_of<Dead, Corpse>(sen->foe)) {
+                    if (const Transform* foeTr =
+                            reg.try_get<Transform>(sen->foe);
+                        foeTr != nullptr && foeTr->layer == layer) {
+                        const float dx = wrap_delta_f(
+                            foeTr->pos.x, tr.pos.x, kWorldExtent);
+                        const float dy = wrap_delta_f(
+                            foeTr->pos.y, tr.pos.y, kWorldExtent);
+                        const float dz = wrap_delta_f(
+                            foeTr->pos.z, tr.pos.z, kWorldExtent);
+                        const vec3 away = tangent(dx, dy, dz);
+                        const float d2 =
+                            away.x * away.x + away.y * away.y + away.z * away.z;
+                        if (d2 > 1e-8f) {
+                            dir = away * (1.0f / std::sqrt(d2));
+                            owned = true;
+                        }
+                    }
                 }
             }
         }

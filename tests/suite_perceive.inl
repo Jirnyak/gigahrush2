@@ -821,15 +821,21 @@ static void test_perceive_all() {
         const vec3 ear{20.0f, 10.0f, 2.0f};     // 10 м — внутри 12 м радиуса
         CHECK(noise_publish(f, 0, src, p, kAnon) != 0u);
         CHECK(f.slot[0].id != 0u);
-        // ПОЛЕ ШУМА ПО-ПРЕЖНЕМУ КОЭРСИТ НОЛЬ В ЕДИНИЦУ, и это названо вслух:
-        // `loudest_heard`/`noise_audible` начинаются с `mult > 0 ? mult : 1`.
-        // Поэтому глухоту обеспечивает НЕ поле, а то, что восприятие с нулевым
-        // множителем поля НЕ СПРАШИВАЕТ ВОВСЕ (`perceive.cpp`). Эти два
-        // утверждения пинят коэрсию как она есть: уберут её — упадут и покажут,
-        // что проверку в проде можно снять.
-        CHECK(loudest_heard(f, 0, ear, 0.0f, kInvestigateMinSeverity, kAnon,
-                            nullptr) != nullptr);
-        CHECK(noise_audible(f.slot[0], ear, 0.0f));
+        // Defect 3b fixed: zero/negative hearingMult now makes the noise field
+        // itself treat the listener as deaf (false/nullptr) instead of coercing
+        // 0.0f -> 1.0f, while positive hearingMult hears normally inside radius.
+        const Noise* deafHeard = loudest_heard(
+            f, 0, ear, 0.0f, kInvestigateMinSeverity, kAnon, nullptr);
+        CHECK(deafHeard == nullptr);
+        const Noise* negHeard = loudest_heard(
+            f, 0, ear, -1.0f, kInvestigateMinSeverity, kAnon, nullptr);
+        CHECK(negHeard == nullptr);
+        const bool audibleDeaf = noise_audible(f.slot[0], ear, 0.0f);
+        CHECK(audibleDeaf == false);
+        const Noise* normalHeard = loudest_heard(
+            f, 0, ear, 1.0f, kInvestigateMinSeverity, kAnon, nullptr);
+        CHECK(normalHeard != nullptr);
+        CHECK(noise_audible(f.slot[0], ear, 1.0f));
 
         // ...и то же в проде: Безэхий заявляет слух наравне с Зомби.
         const float y = 220.125f;

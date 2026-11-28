@@ -2504,5 +2504,53 @@ static void test_utilai_all() {
             CHECK(reg.get<AiBrain>(ePlain).currentIntent == IntentFlee);
             CHECK(reg.get<AiBrain>(eCorr).currentIntent == IntentFlee);
         }
+
+        // 17c: Senses::heardSev -> Perception::gunfire + visible-foe direct escape
+        // fallback when danger field gradient and AiMemory are both empty.
+        {
+            danger.fill(0.0f);
+            Registry reg;
+            NpcPool pool;
+            pool.init();
+            NpcId citId = 0, foeId = 0;
+            Entity cit = make_body(reg, pool, 12, 12, 1, Faction::Citizens, citId);
+            Entity foe = make_body(reg, pool, 16, 12, 1, Faction::Wild, foeId);
+            Needs calm{};
+            calm.food = kNeedMax;
+            calm.water = kNeedMax;
+            calm.sleep = kNeedMax;
+            calm.seeded = 1;
+            pool.needs(citId) = calm;
+            pool.needs(foeId) = calm;
+            CHECK(ai_init(reg, kLayer) == 2u);
+
+            // Loud gunshot heard alone (no visible foe, flat danger=0) triggers
+            // IntentFlee via Perception::gunfire -> threat_max_pressure(0.75 * 1.0).
+            reg.emplace<Senses>(cit, Senses{entt::null, -1.0f, 0u, kNoiseSeverityMax, 1u});
+            AiConfig cfg;
+            cfg.enabled = true;
+            cfg.hysteresis = false;
+            cfg.memory = false;
+            cfg.rethinkBaseSec = 0.0f;
+            cfg.rethinkSpreadSec = 0.0f;
+            ai_step(reg, pool, &danger, grid, kLayer, 0.0, kSimDt, cfg, nullptr,
+                    nullptr, nullptr, nullptr, 1, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
+
+            // Visible armed foe against unarmed citizen with flat danger and no
+            // memory: claims SteerRank::Flee pointing away from foe (-X direction).
+            pool.inventory(foeId).slots[0] = ItemSlot{anyGun, 1};
+            reg.get<Senses>(cit) = Senses{foe, 4.0f, 1u, 0u, 2u};
+            const AiTick tick2 = ai_step(reg, pool, &danger, grid, kLayer, 1.0,
+                                         kSimDt, cfg, nullptr, nullptr, nullptr,
+                                         nullptr, 2, AiEnv{}, &base);
+            CHECK(reg.get<AiBrain>(cit).currentIntent == IntentFlee);
+            CHECK(claim_rank(reg, cit, 2) == SteerRank::Flee);
+            CHECK(tick2.aiOwned >= 1u);
+            const Steer* sc = reg.try_get<Steer>(cit);
+            CHECK(sc != nullptr);
+            CHECK(sc->target.kind == TargetKind::Dir);
+            CHECK(sc->target.dir.x < -0.5f);
+        }
     }
 }
