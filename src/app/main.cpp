@@ -6122,11 +6122,11 @@ int main(int argc, char** argv) {
 
         // --- fixed-step simulation ----------------------------------------
         // Frozen while the pause menu is up; drop accumulated time so resuming
-        // does not fast-forward the missed interval.
-        if (shell.sim_frozen() ||
-            liftRide == LiftRide::SwapRefresh ||
-            liftRide == LiftRide::SwapDoorsNav ||
-            liftRide == LiftRide::SwapUpload) {
+        // does not fast-forward the missed interval. NOT frozen on the lift
+        // swap phases: the cabin never pauses (CANON S9 «КАБИНА — ИНВАРИАНТ»,
+        // owner 2026-11-28 — the lift columns are the frame's invariant
+        // structure, the floor is swapped AROUND them).
+        if (shell.sim_frozen()) {
             simAccum = 0.0f;
         } else {
             simAccum += frameDt;
