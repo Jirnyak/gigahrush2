@@ -680,12 +680,11 @@ void render_mode_zones(Image& img, WorldContext& ctx, const ToolOptions& opt) {
             if (rid == kNoRoom) {
                 img.set_pixel(px, py, 21, 101, 192); // коридор/проход
             } else {
-                const Room* rm = room_of(fr, rid);
                 const std::uint32_t h = giga::hash_u32(rid * 0x9E3779B9u);
                 std::uint8_t r = static_cast<std::uint8_t>(64 + (h & 0x7F));
                 std::uint8_t g = static_cast<std::uint8_t>(64 + ((h >> 8) & 0x7F));
                 std::uint8_t b = static_cast<std::uint8_t>(64 + ((h >> 16) & 0x7F));
-                if (rm != nullptr && (rm->tags & kRoomTagHermetic) != 0) r = 255;
+                if ((fr.room_tags(rid) & kRoomTagHermetic) != 0) r = 255;
                 img.set_pixel(px, py, r, g, b);
             }
         }

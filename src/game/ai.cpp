@@ -778,10 +778,9 @@ AiTick ai_step(Registry& reg, NpcPool& pool, const Field<float>* danger,
             p.samosborWarning = env.samosborWarning;
             p.fog = env.samosborActive ? 1.0f : (env.samosborWarning ? 0.35f : 0.0f);
             if (env.rooms != nullptr) {
-                const Room* r =
-                    room_of(*env.rooms, room_at_pos(*env.rooms, tr.pos));
+                const RoomId rid = room_at_pos(*env.rooms, tr.pos);
                 p.inShelter =
-                    (r != nullptr && (r->tags & kRoomTagHermetic) != 0);
+                    (env.rooms->room_tags(rid) & kRoomTagHermetic) != 0;
             }
             const Equipped* eq = reg.try_get<Equipped>(e);
             const Inventory& inv = pool.inventory(id);

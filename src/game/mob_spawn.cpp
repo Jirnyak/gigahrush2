@@ -341,13 +341,13 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
     // комнате модуля, и ярус пака — ярус КОМНАТЫ, а не случайный z: раньше
     // storey рисовался по всей оси и пак мог зависнуть в толще сэндвича.
     const FloorRooms* fr = rooms_in_ctx(reg);
-    if (fr == nullptr || fr->list.empty()) {
+    if (fr == nullptr || fr->empty()) {
         std::printf("[mobs] floor %d: no declared rooms — spawn skipped\n",
                     floorNumber);
         return 0;
     }
     // Один байт на комнату, от настоящего счёта комнат (тысячи на падике).
-    std::vector<std::uint8_t> packsInRoom(fr->list.size() + 1, 0u);
+    std::vector<std::uint8_t> packsInRoom(fr->size() + 1, 0u);
 
     const GravityFrame gf = regime_frame(world.gravity().regime);
 
@@ -370,12 +370,12 @@ std::uint32_t spawn_floor_mobs(Registry& reg, const World& world,
             const std::uint32_t h =
                 hash_u32(r ^ (static_cast<std::uint32_t>(t) * 0x27220a95u));
             room = static_cast<RoomId>(
-                1u + h % static_cast<std::uint32_t>(fr->list.size()));
+                1u + h % static_cast<std::uint32_t>(fr->size()));
             if (packsInRoom[room] == 0) break;
         }
         std::uint8_t& roomUse = packsInRoom[room];
         if (roomUse < 0xFFu) ++roomUse;
-        const Room& rm = fr->list[room - 1u];
+        const RoomFeature& rm = fr->features[room - 1u];
 
         // 2. ONE kind for the whole pack, from the floor roster. Rolled from
         //    its own hash rather than from `r` directly, so the room draw and

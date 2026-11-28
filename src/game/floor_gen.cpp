@@ -395,7 +395,7 @@ void rooms_declare(FloorRooms& rooms, int number, const FloorSpec& spec,
     const std::uint32_t n =
         kRoomDeclarers[kind_row(spec)].fn(number, seed, rooms, &spec);
     std::size_t cells = 0;
-    for (const Room& r : rooms.list) cells += r.cells;
+    for (const RoomFeature& f : rooms.features) cells += f.cells;
     // Счёт всегда вслух (S11: молчаливого обрезания и молчаливого нуля нет);
     // пересечение зон и отказы — дефект объявителя, кричим отдельно.
     std::printf("[rooms] %s floor %d: %u rooms, %zu cells\n", spec.name, number,

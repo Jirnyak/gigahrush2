@@ -324,7 +324,7 @@ void FloorStreamer::embody_crowd(Registry& ecs, NpcPool& pool, const World& worl
                      censusDrop[0] + censusDrop[1] + censusDrop[2] + censusDrop[3],
                      censusDrop[0], censusDrop[1], censusDrop[2], censusDrop[3],
                      static_cast<double>(censusMaxM), censusVoid,
-                     settle.homeless, zones.list.size(), settle.probes);
+                     settle.homeless, zones.size(), settle.probes);
 }
 
 std::unique_ptr<AntourageBake> FloorStreamer::build_world_half(

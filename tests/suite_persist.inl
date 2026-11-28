@@ -188,14 +188,15 @@ void full_round_trip() {
     const RoomBox rbB{12, 9, 11, 2, 2, 1};
     CHECK(room_declare(rooms1, &rbA, 1, 0, 0) != kNoRoom);
     CHECK(room_declare(rooms1, &rbB, 1, 0, 0) != kNoRoom);
-    rooms1.list[0].rep = -120; // здесь убивали
-    rooms1.list[1].rep = 45;   // здесь лечили
+    rooms1.records[0].rep = -120; // здесь убивали
+    rooms1.records[1].rep = 45;   // здесь лечили
 
     const int floorNo = -7;
     FloorEntityState ents1;
     gather_floor_entities(reg, layer, floorNo, ents1, &power, &rooms1);
-    CHECK(ents1.roomReps.size() == 2);
-    CHECK(ents1.roomReps[0] == -120 && ents1.roomReps[1] == 45);
+    CHECK(ents1.roomDeltas.size() == 2);
+    CHECK(ents1.roomDeltas[0].roomId == 1 && ents1.roomDeltas[0].rep == -120);
+    CHECK(ents1.roomDeltas[1].roomId == 2 && ents1.roomDeltas[1].rep == 45);
     CHECK(ents1.props.size() == 5); // + выключенный терминал (чистка 2026-11-07)
     CHECK(ents1.corpses.size() == 1);
     CHECK(ents1.pickups.size() == 1);
@@ -250,10 +251,10 @@ void full_round_trip() {
     rooms_reset(rooms2);
     CHECK(room_declare(rooms2, &rbA, 1, 0, 0) != kNoRoom);
     CHECK(room_declare(rooms2, &rbB, 1, 0, 0) != kNoRoom);
-    CHECK(ents2.roomReps.size() == 2);
-    restore_room_reps(rooms2, ents2.roomReps.data(), ents2.roomReps.size());
-    CHECK(rooms2.list[0].rep == -120);
-    CHECK(rooms2.list[1].rep == 45);
+    CHECK(ents2.roomDeltas.size() == 2);
+    restore_room_deltas(rooms2, ents2.roomDeltas);
+    CHECK(rooms2.records[0].rep == -120);
+    CHECK(rooms2.records[1].rep == 45);
 
     // Идемпотентность: gather после восстановления = ТЕ ЖЕ байты файла.
     FloorEntityState ents3;
@@ -261,6 +262,30 @@ void full_round_trip() {
     std::vector<std::uint8_t> fileB = canonical_file(w2, floorNo, ents3, key);
     CHECK(fileA.size() == fileB.size());
     CHECK(fileA == fileB);
+
+    // Гейт S18: 0 байт RoomFeature в сейве (геометрия/фичи перештамповываются,
+    // чистый этаж без мутаций репутации и владельца пишет 0 RoomDelta).
+    FloorRooms cleanRooms;
+    rooms_reset(cleanRooms);
+    CHECK(room_declare(cleanRooms, &rbA, 1, 0, 7) != kNoRoom);
+    CHECK(room_declare(cleanRooms, &rbB, 1, 0, 0) != kNoRoom);
+    FloorEntityState cleanEnts;
+    gather_floor_entities(reg, layer, floorNo, cleanEnts, &power, &cleanRooms);
+    CHECK(cleanEnts.roomDeltas.empty());
+    std::vector<std::uint8_t> cleanFile =
+        canonical_file(w, floorNo, cleanEnts, key);
+    FloorRooms restoredClean;
+    rooms_reset(restoredClean);
+    CHECK(room_declare(restoredClean, &rbA, 1, 0, 7) != kNoRoom);
+    CHECK(room_declare(restoredClean, &rbB, 1, 0, 0) != kNoRoom);
+    FloorEntityState restoredEnts;
+    std::int32_t cleanFloorOut = 0;
+    CHECK(floor_file_read(cleanFile.data(), cleanFile.size(), w2,
+                          &cleanFloorOut, &err, &key, &restoredEnts));
+    CHECK(restoredEnts.roomDeltas.empty());
+    restore_room_deltas(restoredClean, restoredEnts.roomDeltas);
+    CHECK(restoredClean.records[0].rep == 0 &&
+          restoredClean.records[0].owner == 7);
 
     // Точечные проверки восстановленного состояния (не только байты):
     // ящик бит-в-бит, лампа неактивна, кнопка несёт ссылку, сорванный —

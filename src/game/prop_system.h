@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <span>
 #include <vector>
 #include <unordered_set>
 #include <cmath>
@@ -402,6 +403,7 @@ int room_stand_spots(const World& world, const FloorRooms& rooms,
 // допускает. Стол даёт `eat 4`/`social 3` и встаёт и в кухню (eat 12), и в
 // зал (social 12). Ни одного числа руками: обе стороны сравнения — строки
 // данных.
+bool prop_fits_room(PropId id, std::span<const std::int16_t, kVerbCount> declared);
 bool prop_fits_room(PropId id, const Room& r);
 
 // Seed wall-mounted devices by scanning MacroGrid with the deterministic

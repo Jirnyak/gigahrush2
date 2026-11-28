@@ -273,8 +273,8 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
 
         // АМБИЕНТНОЕ ВОССТАНОВЛЕНИЕ В ГЕРМОУКРЫТИИ (kRoomTagHermetic) И СЛУЖБА ДЕЯНИЯ
         const RoomId rid = (rooms != nullptr) ? room_at_pos(*rooms, tr.pos) : kNoRoom;
-        const Room* pRoom = (rooms != nullptr) ? room_of(*rooms, rid) : nullptr;
-        const bool inHermetic = (pRoom != nullptr && (pRoom->tags & kRoomTagHermetic) != 0);
+        const bool inHermetic =
+            (rooms != nullptr && (rooms->room_tags(rid) & kRoomTagHermetic) != 0);
         const bool holdingDeed = serve_holding(reg, e, tick);
         if (inHermetic || holdingDeed) {
             ++out.recovering;

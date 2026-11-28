@@ -54,7 +54,7 @@ static void test_rooms_isotropy() {
         CHECK(room_declare(turned, tb, 2, 0, 0) != kNoRoom);
         // Каждая клетка исходника обязана найтись повёрнутой — и наоборот
         // (счёт клеток равен, значит две инъекции = биекция).
-        CHECK(turned.list[0].cells == ref.list[0].cells);
+        CHECK(turned.features[0].cells == ref.features[0].cells);
         bool same = true;
         for (int z = 25; z < 45 && same; ++z)
             for (int y = 15; y < 30 && same; ++y)
@@ -75,7 +75,7 @@ static void test_rooms_no_overlap_no_empty() {
     const RoomBox a{40, 40, 40, 4, 4, 2};
     CHECK(room_declare(fr, &a, 1, 0, 0) == 1);
     CHECK(fr.overlapCells == 0);
-    CHECK(fr.list[0].cells == 4 * 4 * 2);
+    CHECK(fr.features[0].cells == 4 * 4 * 2);
     // Пересечение: клетка остаётся за ПЕРВЫМ объявившим (детерминизм), а
     // спор считается вслух, не молчит.
     const RoomBox b{42, 42, 40, 4, 4, 2};
@@ -93,7 +93,7 @@ static void test_rooms_no_overlap_no_empty() {
     std::size_t nonEmpty = 0;
     for (const RoomId id : fr.roomAt) nonEmpty += id != kNoRoom;
     std::size_t declaredCells = 0;
-    for (const auto& r : fr.list) declaredCells += r.cells;
+    for (const auto& f : fr.features) declaredCells += f.cells;
     CHECK(nonEmpty == declaredCells);
 }
 
@@ -111,7 +111,7 @@ static void test_rooms_wrap_all_axes() {
         o[axis] = 126; // край: зона перехлёстывает 127 -> 0
         RoomBox s{o[0], o[1], o[2], 6, 3, 4};
         CHECK(room_declare(seam, &s, 1, 0, 0) != kNoRoom);
-        CHECK(seam.list[0].cells == mid.list[0].cells);
+        CHECK(seam.features[0].cells == mid.features[0].cells);
         CHECK(seam.overlapCells == 0);
         // Обе стороны шва отвечают одной комнатой.
         int probeLo[3] = {static_cast<int>(o[0]), static_cast<int>(o[1]),
@@ -138,26 +138,26 @@ static void test_rooms_deterministic_ids_and_alias() {
         const RoomId lab = room_declare(*fr, r2, 2, 0, 0);
         room_alias(*fr, room_alias_hash("yakov_lab"), lab);
     }
-    CHECK(a.list.size() == b.list.size());
+    CHECK(a.size() == b.size());
     CHECK(a.roomAt == b.roomAt);
     CHECK(room_find_alias(a, room_alias_hash("yakov_lab")) == 2);
     CHECK(room_find_alias(a, room_alias_hash("no_such_room")) == kNoRoom);
-    // Объявленное предложение неразрушимо и читается через room_of.
-    const Room* r = room_of(a, 1);
-    CHECK(r != nullptr);
-    CHECK(r->declared[kVerbSleep] == 30);
-    CHECK(r->tags == kRoomTagHermetic);
-    CHECK(r->owner == 7);
-    CHECK(room_of(a, kNoRoom) == nullptr);
-    CHECK(room_of(a, 999) == nullptr);
+    // Объявленное предложение неразрушимо и читается через акцессоры и фасад Room.
+    const Room r = a.room(1);
+    CHECK(r.declared[kVerbSleep] == 30);
+    CHECK(r.tags == kRoomTagHermetic);
+    CHECK(r.owner == 7);
+    CHECK(a.room_declared(1)[kVerbSleep] == 30);
+    CHECK(a.room_tags(1) == kRoomTagHermetic);
+    CHECK(a.room_owner(1) == 7);
+    CHECK(a.room(kNoRoom).cells == 0);
+    CHECK(a.room(999).cells == 0);
 }
 
 // Гейт инкремента C: модуль объявляет свои НАСТОЯЩИЕ комнаты — падик отдаёт
 // BSP-листья всех 42 ярусов, blame — гермолобби решётки; зоны не пересекаются
 // и не отвергаются; RoomId бит-в-бит между двумя объявлениями (устойчивость
-// между сессиями — источник в детерминизме плана). Хрущи объявляют 0 ВСЛУХ
-// до решения владельца о полуторном ярусе — пин ниже держит это обещание и
-// покраснеет, когда объявитель сядет (тогда — снять).
+// между сессиями — источник в детерминизме плана).
 static void test_rooms_modules_declare() {
     using namespace giga::game;
     FloorRooms a, b;
@@ -166,17 +166,18 @@ static void test_rooms_modules_declare() {
     rooms_declare(b, /*number=*/4, padicSpec, /*seed=*/1337u);
     // Падик: тысячи комнат (сотни листьев на план x 42 яруса), ни одного
     // пересечения, ни одного отказа — BSP-листья дизъюнктны по построению.
-    CHECK(a.list.size() > 1000);
+    CHECK(a.size() > 1000);
     CHECK(a.overlapCells == 0);
     CHECK(a.refused == 0);
     CHECK(a.roomAt == b.roomAt);
-    CHECK(a.list.size() == b.list.size());
+    CHECK(a.size() == b.size());
     // Объявленное предложение живо: хоть у одной комнаты спать 30 (жилая) и
     // хоть у одной сортир 20 (санузел) — роли листьев доехали до объявления.
     bool sawDwelling = false, sawToilet = false;
-    for (const Room& r : a.list) {
-        sawDwelling = sawDwelling || r.declared[kVerbSleep] == 30;
-        sawToilet = sawToilet || r.declared[kVerbToilet] == 20;
+    for (std::size_t i = 1; i <= a.size(); ++i) {
+        const auto d = a.room_declared(static_cast<RoomId>(i));
+        sawDwelling = sawDwelling || d[kVerbSleep] == 30;
+        sawToilet = sawToilet || d[kVerbToilet] == 20;
     }
     CHECK(sawDwelling);
     CHECK(sawToilet);
@@ -188,11 +189,12 @@ static void test_rooms_modules_declare() {
     // Blame: 16 узлов x 16 бэндов гермолобби, все с тегом и укрытием.
     FloorRooms bl;
     rooms_declare(bl, /*number=*/-26, floor_spec(FloorKind::Blame), 42u);
-    CHECK(bl.list.size() == 256);
+    CHECK(bl.size() == 256);
     CHECK(bl.overlapCells == 0);
-    for (const Room& r : bl.list) {
-        CHECK(r.tags == kRoomTagHermetic);
-        CHECK(r.declared[kVerbShelter] == 10);
+    for (std::size_t i = 1; i <= bl.size(); ++i) {
+        const RoomId id = static_cast<RoomId>(i);
+        CHECK(bl.room_tags(id) == kRoomTagHermetic);
+        CHECK(bl.room_declared(id)[kVerbShelter] == 10);
     }
 
     // Хрущи: 5 комнат на квартиру (прихожая/коридор — проход), 2 квартиры на
@@ -200,19 +202,22 @@ static void test_rooms_modules_declare() {
     FloorRooms kh, kh2;
     rooms_declare(kh, /*number=*/1, floor_spec(FloorKind::Khrushi), 42u);
     rooms_declare(kh2, /*number=*/1, floor_spec(FloorKind::Khrushi), 42u);
-    CHECK(kh.list.size() > 500);
-    CHECK(kh.list.size() % 5 == 0); // комнаты идут пятёрками квартир
+    CHECK(kh.size() > 500);
+    CHECK(kh.size() % 5 == 0); // комнаты идут пятёрками квартир
     CHECK(kh.overlapCells == 0);
     CHECK(kh.refused == 0);
     CHECK(kh.roomAt == kh2.roomAt);
     // Ярусы чередуются 1 и 2 клетки (правило центра, kStoreyRise 12): у
     // спальни 1x3 в плане клеток либо 3, либо 6.
     bool saw3 = false, saw6 = false;
-    for (const Room& r : kh.list)
-        if (r.declared[kVerbSleep] == 30) {
-            saw3 = saw3 || r.cells == 3;
-            saw6 = saw6 || r.cells == 6;
+    for (std::size_t i = 1; i <= kh.size(); ++i) {
+        const RoomId id = static_cast<RoomId>(i);
+        if (kh.room_declared(id)[kVerbSleep] == 30) {
+            const auto cells = kh.room_cells(id);
+            saw3 = saw3 || cells == 3;
+            saw6 = saw6 || cells == 6;
         }
+    }
     CHECK(saw3);
     CHECK(saw6);
 }
@@ -278,21 +283,22 @@ static void test_rooms_supply_oracle() {
     rooms_supply_rebuild(fr, reg, layer);
     std::int32_t rebuilt[kVerbCount];
     for (std::size_t v = 0; v < kVerbCount; ++v)
-        rebuilt[v] = room_of(fr, room)->supply[v];
+        rebuilt[v] = fr.room_supply(room)[v];
 
     // Инкрементальный путь с нуля: те же события руками.
-    for (std::size_t v = 0; v < kVerbCount; ++v)
-        room_of(fr, room)->supply[v] = 0;
+    fr.supplies.assign(1, {});
+    if (room != kNoRoom && room <= fr.records.size())
+        fr.records[room - 1].supplyIdx = 0;
     supply_add_item(fr, room, bread, 2); // контейнер
     supply_add_prop(fr, room, bed, +1);  // койка
     supply_add_item(fr, room, bread, 3); // пикап
     for (std::size_t v = 0; v < kVerbCount; ++v)
-        CHECK(room_of(fr, room)->supply[v] == rebuilt[v]);
+        CHECK(fr.room_supply(room)[v] == rebuilt[v]);
     // И симметрия: убрать всё — ноль (взятое возвращает предложение).
     supply_add_item(fr, room, bread, -5);
     supply_add_prop(fr, room, bed, -1);
     for (std::size_t v = 0; v < kVerbCount; ++v)
-        CHECK(room_of(fr, room)->supply[v] == 0);
+        CHECK(fr.room_supply(room)[v] == 0);
     // Событие в коридоре (kNoRoom) — законный no-op, не падение.
     supply_add_item(fr, kNoRoom, bread, 5);
 }
@@ -362,11 +368,11 @@ static void test_rooms_supply_follows_every_transfer() {
     const auto in_step = [&]() {
         std::int32_t live[kVerbCount];
         for (std::size_t v = 0; v < kVerbCount; ++v)
-            live[v] = room_of(fr, room)->supply[v];
+            live[v] = fr.room_supply(room)[v];
         rooms_supply_rebuild(fr, reg, layer);
         bool same = true;
         for (std::size_t v = 0; v < kVerbCount; ++v)
-            same = same && live[v] == room_of(fr, room)->supply[v];
+            same = same && live[v] == fr.room_supply(room)[v];
         return same;
     };
 
@@ -378,7 +384,7 @@ static void test_rooms_supply_follows_every_transfer() {
         reg.emplace<Container>(crate, c);
     }
     rooms_supply_rebuild(fr, reg, layer);
-    CHECK(room_of(fr, room)->supply[kVerbEat] > 0); // посылка
+    CHECK(fr.room_supply(room)[kVerbEat] > 0); // посылка
 
     Inventory bag;
     CHECK(container_take_slot(reg, crate, bag, 0) == 3);
@@ -433,17 +439,17 @@ static void test_room_owners_from_spec() {
     bool resOnlyMix = true;
     std::uint32_t resOwnedCount = 0;
     unsigned resMask = 0;
-    for (const Room& r : res.list) {
-        if (r.owner > kFactionCount) {
+    for (const auto& rec : res.records) {
+        if (rec.owner > kFactionCount) {
             resValidRange = false;
-        } else if (r.owner != 0) {
+        } else if (rec.owner != 0) {
             ++resOwnedCount;
-            const std::size_t fi = static_cast<std::size_t>(r.owner - 1u);
+            const std::size_t fi = static_cast<std::size_t>(rec.owner - 1u);
             if (resSpec.factionMix[fi] == 0) resOnlyMix = false;
             resMask |= 1u << static_cast<unsigned>(fi);
         }
     }
-    CHECK(!res.list.empty());
+    CHECK(!res.empty());
     CHECK(resValidRange);
     CHECK(resOnlyMix);
     CHECK(resOwnedCount > 0u);
@@ -452,9 +458,9 @@ static void test_room_owners_from_spec() {
 
     FloorRooms resAgain;
     rooms_build(resAgain, /*number=*/0, resSpec, /*seed=*/1337u);
-    bool resSameOwners = res.list.size() == resAgain.list.size();
-    for (std::size_t i = 0; i < res.list.size() && resSameOwners; ++i)
-        resSameOwners = res.list[i].owner == resAgain.list[i].owner;
+    bool resSameOwners = res.size() == resAgain.size();
+    for (std::size_t i = 0; i < res.size() && resSameOwners; ++i)
+        resSameOwners = res.records[i].owner == resAgain.records[i].owner;
     CHECK(resSameOwners);
 
     FloorSpec zeroMix = resSpec;
@@ -462,9 +468,9 @@ static void test_room_owners_from_spec() {
     FloorRooms zeroRooms;
     rooms_build(zeroRooms, /*number=*/0, zeroMix, /*seed=*/1337u);
     bool allZeroOwner = true;
-    for (const Room& r : zeroRooms.list)
-        if (r.owner != 0) allZeroOwner = false;
-    CHECK(!zeroRooms.list.empty() && allZeroOwner);
+    for (const auto& rec : zeroRooms.records)
+        if (rec.owner != 0) allZeroOwner = false;
+    CHECK(!zeroRooms.empty() && allZeroOwner);
 
     const FloorSpec& khSpec = floor_spec(FloorKind::Khrushi);
     FloorRooms kh;
@@ -473,17 +479,17 @@ static void test_room_owners_from_spec() {
     bool khOnlyMix = true;
     std::uint32_t khOwnedCount = 0;
     unsigned khMask = 0;
-    for (const Room& r : kh.list) {
-        if (r.owner > kFactionCount) {
+    for (const auto& rec : kh.records) {
+        if (rec.owner > kFactionCount) {
             khValidRange = false;
-        } else if (r.owner != 0) {
+        } else if (rec.owner != 0) {
             ++khOwnedCount;
-            const std::size_t fi = static_cast<std::size_t>(r.owner - 1u);
+            const std::size_t fi = static_cast<std::size_t>(rec.owner - 1u);
             if (khSpec.factionMix[fi] == 0) khOnlyMix = false;
             khMask |= 1u << static_cast<unsigned>(fi);
         }
     }
-    CHECK(!kh.list.empty());
+    CHECK(!kh.empty());
     CHECK(khValidRange);
     CHECK(khOnlyMix);
     CHECK(khOwnedCount > 0u);
@@ -494,17 +500,18 @@ static void test_room_owners_from_spec() {
     rooms_reset(khCompat);
     khrushi_rooms(/*number=*/6, /*seed=*/42u, khCompat);
     bool khCompatAllZero = true;
-    for (const Room& r : khCompat.list)
-        if (r.owner != 0) khCompatAllZero = false;
-    CHECK(khCompat.list.size() == kh.list.size() && khCompatAllZero);
+    for (const auto& rec : khCompat.records)
+        if (rec.owner != 0) khCompatAllZero = false;
+    CHECK(khCompat.size() == kh.size() && khCompatAllZero);
 
     FloorRooms bl;
     rooms_build(bl, /*number=*/-26, floor_spec(FloorKind::Blame), /*seed=*/42u);
     bool blAllHermeticZeroOwner = true;
-    for (const Room& r : bl.list)
-        if (r.tags != kRoomTagHermetic || r.owner != 0)
+    for (std::size_t i = 0; i < bl.size(); ++i)
+        if (bl.features[i].tags != kRoomTagHermetic ||
+            bl.records[i].owner != 0)
             blAllHermeticZeroOwner = false;
-    CHECK(bl.list.size() == 256u);
+    CHECK(bl.size() == 256u);
     CHECK(blAllHermeticZeroOwner);
 
     const FloorSpec& pdSpec = floor_spec(FloorKind::Padic);
@@ -512,14 +519,15 @@ static void test_room_owners_from_spec() {
     rooms_build(pd, /*number=*/4, pdSpec, /*seed=*/99u);
     std::uint32_t pdOwnedCount = 0;
     bool pdOnlyMix = true;
-    for (const Room& r : pd.list) {
-        if (r.owner != 0) {
+    for (const auto& rec : pd.records) {
+        if (rec.owner != 0) {
             ++pdOwnedCount;
-            if (r.owner > kFactionCount || pdSpec.factionMix[r.owner - 1u] == 0)
+            if (rec.owner > kFactionCount ||
+                pdSpec.factionMix[rec.owner - 1u] == 0)
                 pdOnlyMix = false;
         }
     }
-    CHECK(!pd.list.empty() && pdOwnedCount > 0u && pdOnlyMix);
+    CHECK(!pd.empty() && pdOwnedCount > 0u && pdOnlyMix);
     CHECK(floor_room_owner(&pdSpec, 99u, 4, 0u, kRoomTagHermetic) == 0u);
 }
 

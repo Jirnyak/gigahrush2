@@ -275,19 +275,19 @@ std::uint32_t spawn_floor_containers(Registry& reg, const World& world,
     // модулем комнате — случайная комната, случайная клетка её бокса; зона
     // несёт и ярус, так что «любой storey» получается из самих комнат.
     const FloorRooms* fr = rooms_in_ctx(reg);
-    if (fr == nullptr || fr->list.empty()) {
+    if (fr == nullptr || fr->empty()) {
         std::printf("[crates] floor %d: no declared rooms — spawn skipped\n",
                     floorNumber);
         return 0;
     }
-    std::uint32_t want = container_budget(fr->list.size());
+    std::uint32_t want = container_budget(fr->size());
     if (cap && want > cap) want = cap;
 
     std::uint32_t made = 0;
     for (std::uint32_t i = 0; i < want; ++i) {
         const std::uint32_t h = giga::hash_u32(seed ^ (i * 0x85ebca6bu));
-        const Room& rm =
-            fr->list[h % static_cast<std::uint32_t>(fr->list.size())];
+        const RoomFeature& rm =
+            fr->features[h % static_cast<std::uint32_t>(fr->size())];
         const RoomBox& bx =
             fr->boxes[rm.boxFirst +
                       giga::hash_u32(h ^ 0x51ED270Bu) % rm.boxCount];

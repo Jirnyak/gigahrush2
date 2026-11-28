@@ -22,34 +22,40 @@ RoomId room_at_pos(const FloorRooms& fr, const vec3& pos) {
 
 void supply_add_item(FloorRooms& fr, RoomId room, std::uint16_t item,
                      int countDelta) {
-    Room* r = room_of(fr, room);
-    if (r == nullptr || !item_valid(item) || countDelta == 0) return;
+    if (room == kNoRoom || room > fr.features.size() || !item_valid(item) ||
+        countDelta == 0)
+        return;
+    auto& sup = room_ensure_supply(fr, room);
+    const auto decl = fr.room_declared(room);
     const auto& vec = kItemVerbs[item - 1]; // item ids 1-based ([item_table.h])
     for (std::size_t v = 0; v < kVerbCount; ++v) {
-        r->supply[v] += static_cast<std::int32_t>(vec[v]) * countDelta;
+        sup[v] += static_cast<std::int32_t>(vec[v]) * countDelta;
         // Храповик радиус-отсечки (room.h): граница только растёт — падение
         // supply её не сужает, поэтому она всегда ВЕРХНЯЯ (S13.2).
-        const std::int32_t bound = r->declared[v] + r->supply[v];
+        const std::int32_t bound = static_cast<std::int32_t>(decl[v]) + sup[v];
         if (bound > fr.maxOffer[v]) fr.maxOffer[v] = bound;
     }
-    if (countDelta > 0) rooms_bin_ceil_raise(fr, *r); // потолки бинов, room.h
+    if (countDelta > 0) rooms_bin_ceil_raise(fr, room); // потолки бинов, room.h
 }
 
 void supply_add_prop(FloorRooms& fr, RoomId room, PropId id, int sign) {
-    Room* r = room_of(fr, room);
-    if (r == nullptr || !prop_valid(id) || sign == 0) return;
+    if (room == kNoRoom || room > fr.features.size() || !prop_valid(id) ||
+        sign == 0)
+        return;
+    auto& sup = room_ensure_supply(fr, room);
+    const auto decl = fr.room_declared(room);
     const auto& vec = kPropVerbs[static_cast<std::size_t>(id)];
     for (std::size_t v = 0; v < kVerbCount; ++v) {
-        r->supply[v] += static_cast<std::int32_t>(vec[v]) * sign;
-        const std::int32_t bound = r->declared[v] + r->supply[v]; // храповик,
-        if (bound > fr.maxOffer[v]) fr.maxOffer[v] = bound;       // см. выше
+        sup[v] += static_cast<std::int32_t>(vec[v]) * sign;
+        const std::int32_t bound = static_cast<std::int32_t>(decl[v]) + sup[v]; // храповик,
+        if (bound > fr.maxOffer[v]) fr.maxOffer[v] = bound;                      // см. выше
     }
-    if (sign > 0) rooms_bin_ceil_raise(fr, *r); // потолки бинов, room.h
+    if (sign > 0) rooms_bin_ceil_raise(fr, room); // потолки бинов, room.h
 }
 
 void rooms_supply_rebuild(FloorRooms& fr, Registry& reg, LayerId layer) {
-    for (Room& r : fr.list)
-        for (std::size_t v = 0; v < kVerbCount; ++v) r.supply[v] = 0;
+    fr.supplies.assign(1, {}); // слот 0: дефолтное нулевое предложение
+    for (auto& rec : fr.records) rec.supplyIdx = 0;
 
     // ОСНАЩЕНИЕ: каждый табличный проп слоя. Тот же примитив, что у
     // инкрементального пути, — оракул сравним по построению.

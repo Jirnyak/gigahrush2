@@ -866,7 +866,7 @@ void test_zonenav_all() {
     //
     // «До» — разбивка, равная ОБЪЯВЛЕНИЮ как есть, без раздутия.
     ZonePartition raw;
-    raw.zones = static_cast<std::uint32_t>(fr.list.size());
+    raw.zones = static_cast<std::uint32_t>(fr.size());
     raw.at = fr.roomAt;
     ZoneGraph gBefore;
     bake_zone_graph(raw, oracle, kBodyClearanceSub, gBefore);

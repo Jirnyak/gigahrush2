@@ -76,8 +76,8 @@ static void test_serve_pick_is_the_same_sum_filtered() {
     const RoomBox box{20, 20, 20, 2, 2, 1};
     const RoomId id = room_declare(fr, &box, 1, 0, 0, declared);
     CHECK(id != kNoRoom);
-    const Room* r = room_of(fr, id);
-    CHECK(r != nullptr);
+    const Room r = fr.room(id);
+    CHECK(r.cells > 0);
     // ПОСЫЛКИ СТЕНДА (не гейты): данные сегодня именно такие.
     CHECK(kVerbAction[kVerbStore] >= kActionCount);
     CHECK(kVerbAction[kVerbDrink] < kActionCount);
@@ -86,9 +86,9 @@ static void test_serve_pick_is_the_same_sum_filtered() {
     demand[kVerbStore] = 1000;
     demand[kVerbDrink] = 100;
     VerbId sumLabel = static_cast<VerbId>(kVerbCount);
-    place_interest(*r, demand, &sumLabel);
+    place_interest(r, demand, &sumLabel);
     CHECK(sumLabel == kVerbStore); // одна сумма честно называет хранение
-    const ServePick p = serve_pick(*r, demand);
+    const ServePick p = serve_pick(r, demand);
     CHECK(p.verb == kVerbDrink);   // ...а деяние берёт то, что ВЫПОЛНИМО
     CHECK(p.offer == 1);
     CHECK(p.term == 100);
@@ -99,17 +99,17 @@ static void test_serve_pick_is_the_same_sum_filtered() {
     thirsty[kVerbDrink] = 1000;
     thirsty[kVerbStore] = 1;
     VerbId label2 = static_cast<VerbId>(kVerbCount);
-    place_interest(*r, thirsty, &label2);
+    place_interest(r, thirsty, &label2);
     CHECK(label2 == kVerbDrink);
-    CHECK(serve_pick(*r, thirsty).verb == label2);
+    CHECK(serve_pick(r, thirsty).verb == label2);
 
     // НОЛЬ С ОБЕИХ СТОРОН — «нечего дать», и оба нуля неразличимы для
     // вызывающего намеренно.
     DemandE3 none[kVerbCount] = {};
-    CHECK(serve_pick(*r, none).verb >= kVerbCount);
+    CHECK(serve_pick(r, none).verb >= kVerbCount);
     DemandE3 wantsMissing[kVerbCount] = {};
     wantsMissing[kVerbEat] = 1000; // комната еды не предлагает
-    CHECK(serve_pick(*r, wantsMissing).verb >= kVerbCount);
+    CHECK(serve_pick(r, wantsMissing).verb >= kVerbCount);
 }
 
 // --- 2. НАЧАЛО: ЧЕТЫРЕ ПОЛЯРНОСТИ ------------------------------------------
@@ -347,7 +347,7 @@ static void test_serve_consumes_what_lies_in_the_room() {
     const Entity e = make_body(reg, pool, inside, id);
     // Запас комнаты — НАСТОЯЩЕЙ дверью пересчёта, не руками.
     rooms_supply_rebuild(fr, reg, kLayer);
-    const std::int32_t supplyBefore = room_of(fr, room)->supply[kVerbEat];
+    const std::int32_t supplyBefore = fr.room_supply(room)[kVerbEat];
     CHECK(supplyBefore == breadEat * 2);
 
     const float startFood = 10.0f;
@@ -374,7 +374,7 @@ static void test_serve_consumes_what_lies_in_the_room() {
     CHECK(pool.needs(id).food == startFood + static_cast<float>(breadEat));
     // Хлеб исчез, и запас комнаты упал РОВНО на один хлеб.
     CHECK(reg.get<Container>(box).inv.slots[0].count == 1);
-    CHECK(room_of(fr, room)->supply[kVerbEat] == supplyBefore - breadEat);
+    CHECK(fr.room_supply(room)[kVerbEat] == supplyBefore - breadEat);
     // Предмет сменил хозяина — факт поехал на шину (её читает свидетель).
     bool transferred = false;
     for (std::size_t i = 0; i < bus.size(); ++i)
@@ -437,7 +437,7 @@ static void test_serve_ignores_loose_loot() {
     rooms_supply_rebuild(fr, reg, kLayer);
     // ПОСЫЛКА: пикап в предложение комнаты ВОШЁЛ — иначе гейт мерил бы
     // отсутствие пикапа, а не отказ деяния от него.
-    CHECK(room_of(fr, room)->supply[kVerbEat] == breadEat * 3);
+    CHECK(fr.room_supply(room)[kVerbEat] == breadEat * 3);
 
     const float startFood = 5.0f;
     pool.needs(id).food = startFood;
@@ -453,7 +453,7 @@ static void test_serve_ignores_loose_loot() {
     CHECK(pool.needs(id).food == startFood + static_cast<float>(declaredEat));
     // ...и остались лежать все три (деяние их не тронуло).
     CHECK(reg.get<Pickup>(loose).count == 3);
-    CHECK(room_of(fr, room)->supply[kVerbEat] == breadEat * 3);
+    CHECK(fr.room_supply(room)[kVerbEat] == breadEat * 3);
 }
 
 // --- 5c. ЦЕНА HP СТАРШЕ ПОДГОНКИ -------------------------------------------
@@ -1313,7 +1313,7 @@ static void test_serve_relief_anywhere_puddle_by_place() {
         reg.emplace<Pickup>(pk, Pickup{loaf, 2, 255});
     }
     rooms_supply_rebuild(fr, reg, kLayer);
-    CHECK(room_of(fr, pantry)->supply[kVerbEat] > 0); // посылка: запас поднят
+    CHECK(fr.room_supply(pantry)[kVerbEat] > 0); // посылка: запас поднят
     pool.needs(hid).food = 20.0f;
     reg.get<Transform>(hum).pos = inPantry;
     ServeTick tp{};

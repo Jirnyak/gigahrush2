@@ -116,12 +116,12 @@ std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
     // отказа, и путать их нельзя: «в зоне негде стоять» — свойство ГЕОМЕТРИИ
     // модуля (нет опоры, нет стены), «глагол отказал» — свойство строки.
     std::uint32_t noSpot = 0, wanted = 0;
-    for (std::size_t i = 0; i < ctx.rooms.list.size(); ++i) {
-        const Room& r = ctx.rooms.list[i];
+    for (std::size_t i = 0; i < ctx.rooms.size(); ++i) {
         const RoomId id = static_cast<RoomId>(i + 1); // RoomId = индекс + 1
+        const auto declared = ctx.rooms.room_declared(id);
         int want = 0;
         for (std::size_t fi = 0; fi < theme.furnitureCount; ++fi)
-            if (prop_fits_room(theme.furniture[fi], r)) ++want;
+            if (prop_fits_room(theme.furniture[fi], declared)) ++want;
         if (want == 0) continue;
         if (want > kMaxStandSpots) want = kMaxStandSpots;
         wanted += static_cast<std::uint32_t>(want);
@@ -131,7 +131,7 @@ std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
         for (std::size_t fi = 0; fi < theme.furnitureCount; ++fi) {
             if (si >= n) break; // мест меньше, чем вещей — честно, не падение
             const PropId p = theme.furniture[fi];
-            if (!prop_fits_room(p, r)) continue;
+            if (!prop_fits_room(p, declared)) continue;
             const StandSpot& s = spots[si];
             if (place_prop_standing(reg, world, layer, s.cx, s.cy, s.cz,
                                     s.floorFace, s.backFace, p) != entt::null) {
@@ -143,7 +143,7 @@ std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
     }
     std::printf("[padic] мебель: %u вещей из %u заказанных, зон %zu, из них "
                 "без места %u\n",
-                furnished, wanted, ctx.rooms.list.size(), noSpot);
+                furnished, wanted, ctx.rooms.size(), noSpot);
     return count;
 }
 

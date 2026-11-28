@@ -196,16 +196,17 @@ inline PlacePick brute_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCou
     PlacePick out;
     std::int32_t best = 0;
     std::int32_t bestCost = 0;
-    if (const Room* here = room_of(fr, room_at(fr, cx, cy, cz))) {
+    const RoomId hereId = room_at(fr, cx, cy, cz);
+    if (hereId != kNoRoom) {
         const std::int32_t hereNet =
-            place_interest(*here, demand) - place_crowd_cost(fr, *here, cx, cy, cz);
+            place_interest(fr, hereId, demand) -
+            place_crowd_cost(fr, hereId, cx, cy, cz);
         if (hereNet > 0) best = hereNet;
     }
-    for (std::size_t i = fr.list.size(); i-- > 0;) { // С КОНЦА, не с начала
+    for (std::size_t i = fr.size(); i-- > 0;) { // С КОНЦА, не с начала
         const RoomId id = static_cast<RoomId>(i + 1);
-        const Room& r = fr.list[i];
-        const std::int32_t cost = place_cost(fr, r, cx, cy, cz);
-        const std::int32_t score = place_interest(r, demand) - cost;
+        const std::int32_t cost = place_cost(fr, id, cx, cy, cz);
+        const std::int32_t score = place_interest(fr, id, demand) - cost;
         const bool better =
             score > best ||
             (score == best && out.room != kNoRoom && cost < bestCost) ||
@@ -378,7 +379,7 @@ static void test_place_interest_is_a_dot_product() {
     const RoomBox box{10, 10, 10, 2, 2, 2};
     const RoomId id = room_declare(fr, &box, 1, 0, 0, declared);
     CHECK(id != kNoRoom);
-    const Room& r = *room_of(fr, id);
+    const Room r = fr.room(id);
 
     DemandE3 d[kVerbCount] = {};
     d[kVerbSleep] = kDemandFull;
@@ -497,7 +498,7 @@ static void test_place_canon_s13_3_example() {
     CHECK(home != kNoRoom);
     // Койка внутри — настоящей дверью оснащения (S12.4), не записью в поле.
     supply_add_prop(fr, home, PropId::BedCot, +1);
-    CHECK(room_of(fr, home)->supply[kVerbSleep] == cotSleep);
+    CHECK(fr.room_supply(home)[kVerbSleep] == cotSleep);
 
     // Одинокая койка в одной клетке от тела: предложения объявлено ноль.
     const RoomId lone = declare_cube(fr, bx + 1, by, bz, 1, kVerbSleep, 0);
@@ -508,10 +509,10 @@ static void test_place_canon_s13_3_example() {
     d[kVerbSleep] = kDemandFull; // «хочу спать» на всю тысячу
 
     // ЧИСЛА КАНОНА. 47 − 8 = 39 против 17 − 1 = 16.
-    CHECK(place_interest(*room_of(fr, home), d) == kDeclaredBed + cotSleep);
-    CHECK(place_cost(fr, *room_of(fr, home), bx, by, bz) == 8);
-    CHECK(place_interest(*room_of(fr, lone), d) == cotSleep);
-    CHECK(place_cost(fr, *room_of(fr, lone), bx, by, bz) == 1);
+    CHECK(place_interest(fr, home, d) == kDeclaredBed + cotSleep);
+    CHECK(place_cost(fr, home, bx, by, bz) == 8);
+    CHECK(place_interest(fr, lone, d) == cotSleep);
+    CHECK(place_cost(fr, lone, bx, by, bz) == 1);
 
     const PlacePick pick = place_pick(fr, d, bx, by, bz);
     CHECK(pick.room == home);
@@ -613,7 +614,7 @@ static void test_place_bins_match_brute_force() {
                           static_cast<std::uint8_t>(side), static_cast<std::uint8_t>(side)};
         room_declare(fr, &box, 1, 0, 0, declared);
     }
-    CHECK(fr.list.size() == static_cast<std::size_t>(kRooms));
+    CHECK(fr.size() == static_cast<std::size_t>(kRooms));
 
     // Четыре профиля спроса: сосредоточенный, смешанный, слабый, нулевой.
     DemandE3 profiles[4][kVerbCount] = {};
@@ -1415,7 +1416,7 @@ static void test_place_room_capacity_and_crowd() {
     const RoomId roomA = declare_cube(fr, bx + 2, by, bz, 1, kVerbSleep, 30);
     const RoomId roomB = declare_cube(fr, bx + 6, by, bz, 1, kVerbSleep, 30);
     CHECK(roomA == 1 && roomB == 2);
-    const std::uint32_t capA = room_capacity(*room_of(fr, roomA));
+    const std::uint32_t capA = fr.room_capacity(roomA);
     CHECK(capA == kRoomBodiesPerCell);
 
     DemandE3 d[kVerbCount] = {};

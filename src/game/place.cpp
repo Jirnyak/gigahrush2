@@ -3,9 +3,11 @@
 #include "game/place.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <span>
 #include <vector>
 
 #include "core/math.h"        // vec3
@@ -111,14 +113,16 @@ const std::int32_t* lookup_pickup_adj(const std::vector<RoomPickupAdj>* adj,
     return it->offer;
 }
 
-std::int32_t place_interest_adj(const Room& r, const DemandE3 demand[kVerbCount],
+std::int32_t place_interest_adj(std::span<const std::int16_t, kVerbCount> decl,
+                                std::span<const std::int32_t, kVerbCount> sup,
+                                const DemandE3 demand[kVerbCount],
                                 const std::int32_t* pickupSub, VerbId* topVerb) {
     std::int64_t acc = 0;
     std::int64_t top = 0;
     VerbId topV = static_cast<VerbId>(kVerbCount);
     for (std::size_t v = 0; v < kVerbCount; ++v) {
         std::int64_t offer =
-            static_cast<std::int64_t>(r.declared[v]) + static_cast<std::int64_t>(r.supply[v]);
+            static_cast<std::int64_t>(decl[v]) + static_cast<std::int64_t>(sup[v]);
         if (pickupSub != nullptr) {
             offer -= static_cast<std::int64_t>(pickupSub[v]);
             if (offer < 0) offer = 0;
@@ -138,10 +142,10 @@ std::int32_t place_interest_adj(const Room& r, const DemandE3 demand[kVerbCount]
 // избегает точек внутри сплошной твёрдой плиты (grid->mask.full()) или в
 // несвязанной высоте бокса, предпочитая ближайшую клетку, принадлежащую
 // roomId и входящую в её ZonePartition.
-int errand_target_cell(const FloorRooms& fr, const Room& r, RoomId roomId,
+int errand_target_cell(const FloorRooms& fr, RoomId roomId,
                        const ZoneNav* zones, const MacroGrid* grid,
                        int cx, int cy, int cz, int& tx, int& ty, int& tz) {
-    const int fallback = place_target_cell(fr, r, cx, cy, cz, tx, ty, tz);
+    const int fallback = place_target_cell(fr, roomId, cx, cy, cz, tx, ty, tz);
     if (fallback < 0) return -1;
     auto cell_ok = [&](int ox, int oy, int oz, bool needZone) {
         if (room_at(fr, ox, oy, oz) != roomId) return false;
@@ -159,10 +163,7 @@ int errand_target_cell(const FloorRooms& fr, const Room& r, RoomId roomId,
     for (int pass = 0; pass < 2 && bestDist < 0; ++pass) {
         const bool needZone = (pass == 0);
         if (needZone && !hasZones) continue;
-        for (std::uint32_t b = 0; b < r.boxCount; ++b) {
-            const std::size_t bi = static_cast<std::size_t>(r.boxFirst) + b;
-            if (bi >= fr.boxes.size()) break;
-            const RoomBox& box = fr.boxes[bi];
+        for (const RoomBox& box : fr.room_boxes(roomId)) {
             for (int dz = 0; dz < box.sz; ++dz)
                 for (int dy = 0; dy < box.sy; ++dy)
                     for (int dx = 0; dx < box.sx; ++dx) {
@@ -262,9 +263,36 @@ void demand_add_health(float hp, float maxHp, DemandE3 out[kVerbCount]) {
 // ОДНА СУММА
 // ---------------------------------------------------------------------------
 
+std::int32_t place_interest(const FloorRooms& fr, RoomId id,
+                            const DemandE3 demand[kVerbCount],
+                            VerbId* topVerb) {
+    return place_interest_adj(fr.room_declared(id), fr.room_supply(id), demand,
+                              nullptr, topVerb);
+}
+
 std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
                             VerbId* topVerb) {
-    return place_interest_adj(r, demand, nullptr, topVerb);
+    return place_interest_adj(r.declared, r.supply, demand, nullptr, topVerb);
+}
+
+int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
+                      int& tx, int& ty, int& tz) {
+    const auto boxes = fr.room_boxes(id);
+    if (boxes.empty()) return -1;
+    int best = -1;
+    for (const RoomBox& box : boxes) {
+        const int ox = wrap_macro(box.x + box.sx / 2);
+        const int oy = wrap_macro(box.y + box.sy / 2);
+        const int oz = wrap_macro(box.z);
+        const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
+        if (best < 0 || d < best) {
+            best = d;
+            tx = ox;
+            ty = oy;
+            tz = oz;
+        }
+    }
+    return best;
 }
 
 int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int cz,
@@ -290,28 +318,37 @@ int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int c
     return best;
 }
 
-std::int32_t place_crowd_cost(const FloorRooms& fr, const Room& r,
+std::int32_t place_crowd_cost(const FloorRooms& fr, RoomId id,
                               int cx, int cy, int cz) {
-    if (fr.list.empty() || fr.occupants.empty()) return 0;
-    const Room* base = fr.list.data();
-    if (&r < base || &r >= base + fr.list.size()) return 0;
-    const RoomId id = static_cast<RoomId>((&r - base) + 1);
+    if (id == kNoRoom || id > fr.records.size()) return 0;
     const std::uint16_t occ = room_occupants(fr, id);
     if (occ == 0) return 0;
     const bool isHere = room_at(fr, cx, cy, cz) == id;
     const std::uint32_t others =
         isHere ? static_cast<std::uint32_t>(occ - 1u)
                : static_cast<std::uint32_t>(occ);
-    const std::uint32_t cap = room_capacity(r);
+    const std::uint32_t cap = fr.room_capacity(id);
     if (cap == 0 || others < cap) return 0;
     const std::uint32_t excess = (others - cap) + 1u;
     return static_cast<std::int32_t>(excess) * kRoomCrowdCostPerExtra;
 }
 
+std::int32_t place_crowd_cost(const FloorRooms& fr, const Room& r,
+                              int cx, int cy, int cz) {
+    // Фасад Room передан по значению — найти RoomId из указателя нельзя,
+    // поиск живого переполнения всегда идёт через overload по RoomId.
+    (void)fr;
+    (void)r;
+    (void)cx;
+    (void)cy;
+    (void)cz;
+    return 0;
+}
+
 void rooms_occupants_rebuild(FloorRooms& fr, const Registry& reg,
                              LayerId layer) {
     rooms_occupants_clear(fr);
-    if (fr.list.empty()) return;
+    if (fr.empty()) return;
     auto view = reg.view<const NpcRef, const Transform>();
     for (auto e : view) {
         if (reg.any_of<Dead, Corpse>(e)) continue;
@@ -325,6 +362,13 @@ void rooms_occupants_rebuild(FloorRooms& fr, const Registry& reg,
         if (plan != nullptr && plan->room != kNoRoom && plan->room != at)
             room_occupant_add(fr, plan->room, +1);
     }
+}
+
+std::int32_t place_cost(const FloorRooms& fr, RoomId id, int cx, int cy, int cz) {
+    int tx = 0, ty = 0, tz = 0;
+    const int cells = place_target_cell(fr, id, cx, cy, cz, tx, ty, tz);
+    if (cells < 0) return 0;
+    return cells * kPlacePathCostPerCell + place_crowd_cost(fr, id, cx, cy, cz);
 }
 
 std::int32_t place_cost(const FloorRooms& fr, const Room& r, int cx, int cy, int cz) {
@@ -357,7 +401,7 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
                           int cx, int cy, int cz, const std::int32_t* carried,
                           const std::vector<RoomPickupAdj>* pickupAdj) {
     PlacePick out;
-    if (fr.list.empty() || fr.bins.empty() || fr.binCeil.empty()) return out;
+    if (fr.empty() || fr.bins.empty() || fr.binCeil.empty()) return out;
 
     // ТОЧКА ПОД НОГАМИ — КАНДИДАТ ВСЕГДА, и её путь нулевой. Коридор даёт ноль:
     // то, через что идут, не предлагает ничего (S12.1) — кроме того, что тело
@@ -367,12 +411,13 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
     std::int32_t bestCost = 0;
     VerbId bestVerb = static_cast<VerbId>(kVerbCount);
     const RoomId hereId = room_at(fr, cx, cy, cz);
-    if (const Room* here = room_of(fr, hereId)) {
+    if (hereId != kNoRoom && hereId <= fr.features.size()) {
         VerbId hereVerb = static_cast<VerbId>(kVerbCount);
         const std::int32_t hereNet =
-            place_interest_adj(*here, demand, lookup_pickup_adj(pickupAdj, hereId),
+            place_interest_adj(fr.room_declared(hereId), fr.room_supply(hereId),
+                               demand, lookup_pickup_adj(pickupAdj, hereId),
                                &hereVerb) -
-            place_crowd_cost(fr, *here, cx, cy, cz);
+            place_crowd_cost(fr, hereId, cx, cy, cz);
         if (hereNet > 0) {
             best += hereNet;
             bestVerb = hereVerb;
@@ -390,46 +435,31 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
     const int bz = cz >> kRoomBinShift;
 
     for (int r = 0; r <= kRoomBinDim / 2; ++r) {
-        // НИЖНЯЯ ГРАНЬ ПУТИ до любой клетки бина шелла r: вдоль оси, по которой
-        // индексы бинов разошлись на r, расстояние не меньше (r−1) рёбер бина.
-        // Для r ∈ {0,1} грань нулевая — соседний бин может касаться вплотную.
         const std::int32_t lower =
             r > 1 ? static_cast<std::int32_t>(r - 1) * kRoomBinEdge : 0;
-        // Шеллы идут по возрастанию грани, поэтому первый недотягивающий шелл
-        // кончает обход: это и есть «R = maxИнтерес / цена клетки» без деления.
         if (top - lower <= best) break;
 
         for (int dz = -r; dz <= r; ++dz)
             for (int dy = -r; dy <= r; ++dy)
                 for (int dx = -r; dx <= r; ++dx) {
-                    // Только оболочка: хотя бы одна координата на краю куба.
                     if (std::abs(dx) != r && std::abs(dy) != r && std::abs(dz) != r)
                         continue;
                     const std::size_t bi = room_bin_index(bx + dx, by + dy, bz + dz);
                     ++out.bins;
-                    // ОТСЕЧКА ПОТОЛКОМ: потолок — max предложения по комнатам
-                    // бина, значит Σ спрос·потолок — верхняя грань интереса
-                    // ЛЮБОЙ его комнаты. Не догоняет лидера — бин пропущен
-                    // целиком, и честного кандидата отрезать нельзя.
                     const std::int32_t ceilBound =
                         dot_e3(demand, &fr.binCeil[bi * kVerbCount]);
                     if (ceilBound - lower <= best) continue;
                     for (const RoomId id : fr.bins[bi]) {
-                        const Room* cand = room_of(fr, id);
-                        if (cand == nullptr) continue;
+                        if (id == kNoRoom || id > fr.features.size()) continue;
                         ++out.judged;
-                        const std::int32_t cost = place_cost(fr, *cand, cx, cy, cz);
+                        const std::int32_t cost = place_cost(fr, id, cx, cy, cz);
                         VerbId candVerb = static_cast<VerbId>(kVerbCount);
                         const std::int32_t score =
-                            place_interest_adj(*cand, demand,
+                            place_interest_adj(fr.room_declared(id),
+                                               fr.room_supply(id), demand,
                                                lookup_pickup_adj(pickupAdj, id),
                                                &candVerb) -
                             cost;
-                        // НИЧЬЮ РЕШАЕТ ФИЗИКА (S13.2): интерес → расстояние →
-                        // номер. Строгое `>` по счёту плюс сравнение издержки
-                        // значит, что равный счёт забирает БЛИЖАЙШИЙ, а не
-                        // первый по памяти; место под ногами с нулевой
-                        // издержкой побеждает любую ничью и тело не трогается.
                         const bool better =
                             score > best ||
                             (score == best && out.room != kNoRoom && cost < bestCost) ||
@@ -478,7 +508,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     // решётка; теперь единственный нав ходьбы это зоны, и ветки «без зон»
     // больше нет (§88/F.2 шаг 3).
     if (zones == nullptr || !zones->built()) return out;
-    if (fr.roomAt.empty() || fr.list.empty()) return out;
+    if (fr.roomAt.empty() || fr.empty()) return out;
 
     // ПУЛЫ ПРОГРЕТЫ ДО ОТКРЫТИЯ ВИДА, и это не оптимизация, а снятие класса
     // UB. Внутри обхода проход СОЗДАЁТ компоненты (`ErrandPlan` лениво,
@@ -577,23 +607,21 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
 
         // Цель могла исчезнуть вместе с этажом: комнаты пересоздаются на каждом
         // входе (закон 2 room.h), а компонента живёт с телом.
-        const Room* goal = room_of(fr, plan.room);
-        if (plan.room != kNoRoom && goal == nullptr) {
+        bool goalValid =
+            (plan.room != kNoRoom && plan.room <= fr.features.size());
+        if (plan.room != kNoRoom && !goalValid) {
             plan.room = kNoRoom;
             plan.verb = static_cast<VerbId>(kVerbCount);
         }
 
         int tx = 0, ty = 0, tz = 0;
         bool haveTarget = false;
-        if (plan.room != kNoRoom && goal != nullptr) {
+        if (plan.room != kNoRoom && goalValid) {
             haveTarget =
-                errand_target_cell(fr, *goal, plan.room, zones, grid, cx, cy, cz,
+                errand_target_cell(fr, plan.room, zones, grid, cx, cy, cz,
                                    tx, ty, tz) >= 0;
             // ПРИБЫЛ = ВНУТРИ ОБЪЯВЛЕННОЙ КОМНАТЫ (или в её целевой клетке при
-            // перекрытии). Раздутая зона ZonePartition шире бокса комнаты и
-            // захватывает коридор, где serve_begin законно отвечает corridor;
-            // поэтому по zone_of_body == plan.room прибытие не срабатывает —
-            // последнюю ногу из раздутого коридора ведёт прямой пеленг ниже.
+            // перекрытии).
             if (room_at(fr, cx, cy, cz) == plan.room ||
                 (haveTarget && cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
@@ -602,22 +630,12 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 plan.room = kNoRoom;
                 plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
+                goalValid = false;
             }
         }
 
         // ВЫБОР — ПО СОБЫТИЮ: только когда цели нет и стаггер истёк.
         if (plan.room == kNoRoom) {
-            // (1) ЗАНЯТ ДЕЯНИЕМ — сумму не спрашиваем вовсе. Порядок не
-            // вкусовой: занятость монотонна (S22.1), и если спросить сумму
-            // раньше, легшее спать тело получило бы на ближайшем кадансе
-            // новую цель и ушло бы досыпать НА ХОДУ, а окно закрылось бы само
-            // и уронило эффект по дороге.
-            //
-            // ВОПРОС ЧИСТЫЙ: контактный кадр сняли раньше, в `serve_step` —
-            // ОДНОМ поллере окон деяния для любого тела. «Держит» = окно идёт
-            // ИЛИ ещё должно свой эффект: окно, которое поллер этого тика не
-            // посетил, иначе перезаписалось бы выбором ниже, и эффект пропал
-            // бы молча.
             if (serve_holding(reg, e, tick)) {
                 hold_still(e);
                 ++out.serving;
@@ -629,8 +647,6 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 demand_from_needs(row, demand);
                 demand_add_health(static_cast<float>(pool.hp(id)),
                                   static_cast<float>(pool.max_hp(id)), demand);
-                // Своя сумка — часть места под ногами (решение владельца
-                // 2026-11-14): с хлебом в кармане на кухню не ходят.
                 std::int32_t carried[kVerbCount];
                 carried_offer(pool.inventory(id), carried);
                 const PlacePick pick = place_pick_impl(
@@ -643,16 +659,11 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                     plan.verb = pick.verb;  // ярлык пары — ЗАЧЕМ тело идёт
                     ++plan.picks;
                     ++out.picked;
-                    goal = room_of(fr, plan.room);
+                    goalValid = (plan.room <= fr.features.size());
                     if (pick.room != room_at(fr, cx, cy, cz))
                         room_occupant_add(fr, pick.room, +1);
                 }
-                // Иначе «ничто не обгоняет место под ногами» — законный
-                // ответ, а не неудача, и дальше его обслуживает деяние.
             }
-            // (3) ДЕЯНИЕ НА МЕСТЕ — ТОЛЬКО ПО ОТВЕТУ СУММЫ (S24, закон 1).
-            // Цели нет ⟺ последний ответ суммы был «оставайся», поэтому
-            // деяние ей не противоречит; тело с целью сюда не попадает и идёт.
             if (plan.room == kNoRoom) {
                 if (serve_begin(ServeCtx{reg, pool, fr, bus, tick}, e, id,
                                 tr.pos, srv)) {
@@ -664,53 +675,25 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 continue;
             }
         }
-        if (goal == nullptr) {
+        if (!goalValid) {
             ++out.idle;
             continue;
         }
         if (plan.verb < kVerbCount) ++out.byVerb[plan.verb];
 
-        // КУДА ШАГНУТЬ — НАВ ПО ЗОНАМ, ДВА ЧТЕНИЯ, и ни одной волны (§88/E).
-        // Цель — ЗОНА, а не клетка: таблица даёт соседку, плоскость соседки
-        // даёт направление. Ступеньку разрешает сама дверь, поэтому ветки на
-        // вертикаль здесь нет.
-        //
-        // Клетки цели этот шаг БОЛЬШЕ НЕ СПРАШИВАЕТ, и это следствие сноса
-        // решётки: `route_step` композировал два запечённых яруса и отвечал
-        // «шаг к ближайшему ЯКОРЮ цели», поэтому ему нужна была клетка. У зон
-        // цель и есть узел графа. Клетку по-прежнему считает ПРИБЫТИЕ выше
-        // (третьим условием, на случай клетки, отданной перекрытию).
-        //
-        // Отказ «у комнаты нет клетки» тоже уехал сюда: его отдаёт сама
-        // таблица зон (`kZoneUnreachable` -> `kZoneFlowNone`), и это честнее —
-        // прежняя проверка `place_target_cell < 0` считала такое тело `idle`,
-        // то есть молча, а теперь оно считается `unreachable` и видно прибору.
-        //
-        // Зона тела — через дверь с опорой на соседа: клетка центра тела
-        // бывает дыркой в разбивке (замер: 26 тел на тик), и это следствие
-        // названной неточности клиренса, а не дефект разбивки.
         const RoomId myZone = zone_of_body(*zones, cx, cy, cz);
         if (myZone == kNoRoom) {
-            // Тело стоит там, где по карте путей стоять нельзя (нет
-            // касания): вести его некуда, отдаём вандеру.
             ++out.offnav;
             ++out.idle;
             continue;
         }
-        // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`): два
-        // чтения нава, прицел в ЦЕНТР следующей клетки, нормировка. Эти
-        // тридцать строк стояли побайтово одинаково здесь, в `wander.cpp` и в
-        // `ai.cpp`.
         const AABB* box = reg.try_get<AABB>(e);
         const vec3 half = box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f};
-        // Тело вошло в раздутую зону цели (коридор перед дверью): zone_walk_dir
-        // при myZone == target молчит (kZoneFlowNone), поэтому доводим до
-        // ближайшей проходимой клетки объявленной комнаты прямым пеленгом.
         if (myZone == plan.room) {
             ++out.zoneDistBodies;
             if (!haveTarget) {
                 haveTarget =
-                    errand_target_cell(fr, *goal, plan.room, zones, grid, cx,
+                    errand_target_cell(fr, plan.room, zones, grid, cx,
                                        cy, cz, tx, ty, tz) >= 0;
             }
             const vec3 dir =

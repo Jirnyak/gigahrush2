@@ -3058,18 +3058,17 @@ int main(int argc, char** argv) {
                                        ents.debris.size());
             game::restore_power_keys(powerGrid, ents.powerKeys.data(),
                                      ents.powerKeys.size());
-            // Репутация комнат (S13.6): rooms_declare этого прибытия уже
+            // Дельты комнат (S18, floor v8): rooms_declare этого прибытия уже
             // отработал (комнаты РАНЬШЕ сидеров) — накопленное ложится
             // поверх свежей декларации по индексу объявления.
-            game::restore_room_reps(floorRooms, ents.roomReps.data(),
-                                    ents.roomReps.size());
+            game::restore_room_deltas(floorRooms, ents.roomDeltas);
             std::fprintf(stderr,
                          "[persist] floor %d entities RESTORED: %zu props, "
                          "%zu corpses, %zu pickups, %zu debris, %zu power "
-                         "keys, %zu room reps\n",
+                         "keys, %zu room deltas\n",
                          floorNo, np, ents.corpses.size(),
                          ents.pickups.size(), ents.debris.size(),
-                         ents.powerKeys.size(), ents.roomReps.size());
+                         ents.powerKeys.size(), ents.roomDeltas.size());
         } else {
             refresh_floor_containers(reg, stack.layer(nl), floorNo, nl);
             // `floorRooms` — объявление ЭТОГО прибытия: каждый путь входа
@@ -7368,17 +7367,21 @@ int main(int argc, char** argv) {
                         std::int64_t sumDecl[game::kVerbCount] = {};
                         std::int64_t sumSup[game::kVerbCount] = {};
                         std::int32_t maxOff[game::kVerbCount] = {};
-                        for (const game::Room& r : floorRooms.list)
+                        for (std::size_t i = 1; i <= floorRooms.size(); ++i) {
+                            const game::RoomId rid = static_cast<game::RoomId>(i);
+                            const auto decl = floorRooms.room_declared(rid);
+                            const auto sup = floorRooms.room_supply(rid);
                             for (std::size_t v = 0; v < game::kVerbCount; ++v) {
                                 const std::int32_t off =
-                                    static_cast<std::int32_t>(r.declared[v]) +
-                                    r.supply[v];
+                                    static_cast<std::int32_t>(decl[v]) +
+                                    sup[v];
                                 if (off <= 0) continue;
                                 ++roomsWith[v];
-                                sumDecl[v] += r.declared[v];
-                                sumSup[v] += r.supply[v];
+                                sumDecl[v] += decl[v];
+                                sumSup[v] += sup[v];
                                 if (off > maxOff[v]) maxOff[v] = off;
                             }
+                        }
                         std::uint32_t wanters[game::kVerbCount] = {};
                         std::int64_t sumDem[game::kVerbCount] = {};
                         std::uint32_t topHere[game::kVerbCount] = {};
@@ -7425,14 +7428,15 @@ int main(int argc, char** argv) {
                                 std::floor(tr.pos.y / giga::kCellSize)));
                             const int cz = giga::wrap_macro(static_cast<int>(
                                 std::floor(tr.pos.z / giga::kCellSize)));
-                            const game::Room* hr = game::room_of(
-                                floorRooms, game::room_at(floorRooms, cx, cy, cz));
-                            if (hr == nullptr) {
+                            const game::RoomId hrid =
+                                game::room_at(floorRooms, cx, cy, cz);
+                            if (hrid == game::kNoRoom) {
                                 ++inCorridor;
                             } else {
                                 game::VerbId hv =
                                     static_cast<game::VerbId>(game::kVerbCount);
-                                game::place_interest(*hr, demand, &hv);
+                                game::place_interest(floorRooms, hrid, demand,
+                                                     &hv);
                                 if (hv < game::kVerbCount) ++topHere[hv];
                             }
                             if (game::place_pick(floorRooms, demand, cx, cy, cz)
@@ -10634,13 +10638,13 @@ int main(int argc, char** argv) {
                         floorRooms, static_cast<int>(pp.x / kCellSize),
                         static_cast<int>(pp.y / kCellSize),
                         static_cast<int>(pp.z / kCellSize));
-                    const game::Room* rm = game::room_of(floorRooms, rid);
-                    if (rm == nullptr || rm->owner == 0) return; // ничья
+                    const std::uint16_t roomOwner = floorRooms.room_owner(rid);
+                    if (roomOwner == 0) return; // ничья
                     // У своей фракции не воруют (кодировка S14.3: 1..count).
                     if (const auto* pref = reg.try_get<game::NpcRef>(player);
                         pref != nullptr && pool.valid(pref->id) &&
-                        rm->owner <= game::kFactionCount &&
-                        pool.faction(pref->id) + 1u == rm->owner)
+                        roomOwner <= game::kFactionCount &&
+                        pool.faction(pref->id) + 1u == roomOwner)
                         return;
                     game::deed_publish(bus, game::kVerbRob, player,
                                        game::kInvalidNpc, pp, simTick);

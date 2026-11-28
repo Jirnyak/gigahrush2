@@ -113,7 +113,7 @@ static void test_packs_all() {
 
         std::vector<vec3> at;
         std::vector<std::uint8_t> kindOf, packOf;
-        std::vector<std::uint8_t> roomTaken(fr.list.size() + 1, 0u);
+        std::vector<std::uint8_t> roomTaken(fr.size() + 1, 0u);
         std::size_t occupied = 0;
         for (auto e : reg.view<const MobRef, const Transform>()) {
             const MobRef& m = reg.get<const MobRef>(e);
@@ -172,9 +172,9 @@ static void test_packs_all() {
         // вместе с решёткой.
         std::fprintf(stderr,
                      "[packs] floor 4 derelict: heads=%u rooms=%zu occupied=%zu\n",
-                     n, fr.list.size(), occupied);
+                     n, fr.size(), occupied);
         CHECK(occupied > 0);
-        CHECK(occupied < fr.list.size() / 4); // паки — соль, не сплошная заливка
+        CHECK(occupied < fr.size() / 4); // паки — соль, не сплошная заливка
 
         // One kind per pack. This is the room contract — a room's roster is rolled
         // once — and it is what makes a group read as a swarm rather than a queue.

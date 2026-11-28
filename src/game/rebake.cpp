@@ -279,7 +279,7 @@ void RebakeScheduler::start_fresh(const MacroGrid& grid, FloorKind kind,
     haveZones_ = rooms != nullptr && !rooms->roomAt.empty();
     if (haveZones_) {
         snapRooms_.roomAt = rooms->roomAt;
-        snapRooms_.list.assign(rooms->list.size(), Room{});
+        snapRooms_.features.assign(rooms->features.size(), RoomFeature{});
         snapGravity_ = gravity;
     }
     snapGen_ = worldGen_;

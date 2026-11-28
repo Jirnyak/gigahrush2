@@ -1043,10 +1043,23 @@ std::size_t gather_floor_entities(Registry& reg, LayerId layer, int floorNumber,
     if (power)
         for (std::uint32_t i = 0; i < power->count; ++i)
             out.powerKeys.push_back(power->destroyedShieldKeys[i]);
-    // РЕПУТАЦИЯ КОМНАТ (S13.6, floor v5): по индексу объявления — порядок
-    // rooms_declare детерминирован и есть ключ (см. FloorEntityState).
-    if (rooms != nullptr)
-        for (const Room& r : rooms->list) out.roomReps.push_back(r.rep);
+    // Дельты комнат (S18, floor v8): только комнаты с изменившейся репутацией
+    // или владельцем — чистый этаж весит 0 байт.
+    if (rooms != nullptr) {
+        const std::size_t nRooms = rooms->records.size();
+        for (std::size_t i = 0; i < nRooms; ++i) {
+            const auto& rec = rooms->records[i];
+            const std::uint16_t baseOwner =
+                (i < rooms->features.size()) ? rooms->features[i].baseOwner : 0u;
+            if (rec.rep != 0 || rec.owner != baseOwner) {
+                RoomDelta d{};
+                d.roomId = static_cast<std::uint16_t>(i + 1);
+                d.rep = rec.rep;
+                d.owner = rec.owner;
+                out.roomDeltas.push_back(d);
+            }
+        }
+    }
     return out.props.size() + out.corpses.size() + out.pickups.size() +
            out.debris.size() + out.powerKeys.size();
 }
@@ -1129,8 +1142,18 @@ void restore_room_reps(FloorRooms& rooms, const std::int16_t* reps,
                        std::size_t n) {
     // По индексу объявления; хвост длиннее списка (модуль перенарезал
     // комнаты между версиями) отбрасывается — декларация главнее.
-    const std::size_t m = rooms.list.size() < n ? rooms.list.size() : n;
-    for (std::size_t i = 0; i < m; ++i) rooms.list[i].rep = reps[i];
+    if (!reps || n == 0) return;
+    const std::size_t m = rooms.records.size() < n ? rooms.records.size() : n;
+    for (std::size_t i = 0; i < m; ++i) rooms.records[i].rep = reps[i];
+}
+
+void restore_room_deltas(FloorRooms& rooms, std::span<const RoomDelta> deltas) {
+    for (const RoomDelta& d : deltas) {
+        if (d.roomId == kNoRoom || d.roomId > rooms.records.size()) continue;
+        RoomRecord& rec = rooms.records[d.roomId - 1];
+        rec.rep = d.rep;
+        rec.owner = d.owner;
+    }
 }
 
 void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
@@ -2091,9 +2114,12 @@ void floor_file_write(const World& w, int floorNumber,
         }
         bw.u32(static_cast<std::uint32_t>(e.powerKeys.size()));
         for (std::uint64_t kkey : e.powerKeys) bw.u64(kkey);
-        bw.u32(static_cast<std::uint32_t>(e.roomReps.size()));
-        for (std::int16_t rep : e.roomReps)
-            bw.u16(static_cast<std::uint16_t>(rep));
+        bw.u32(static_cast<std::uint32_t>(e.roomDeltas.size()));
+        for (const RoomDelta& d : e.roomDeltas) {
+            bw.u16(d.roomId);
+            bw.u16(static_cast<std::uint16_t>(d.rep));
+            bw.u16(d.owner);
+        }
     }
     {
         std::vector<std::uint8_t> geo;
@@ -2115,9 +2141,10 @@ void floor_file_write(const World& w, int floorNumber,
     }
 
     if (ents) {
-        const std::size_t counts[5] = {ents->props.size(), ents->corpses.size(),
+        const std::size_t counts[6] = {ents->props.size(), ents->corpses.size(),
                                        ents->pickups.size(), ents->debris.size(),
-                                       ents->powerKeys.size()};
+                                       ents->powerKeys.size(),
+                                       ents->roomDeltas.size()};
         for (std::size_t c : counts)
             if (c > static_cast<std::size_t>(kMaxFloorRecords))
                 std::fprintf(stderr,
@@ -2160,7 +2187,8 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     r.u32(blobBytes);
     r.u32(crc);
     if (magic != kFloorMagic) return fail(SaveError::BadMagic);
-    if (version != kFloorFileVersion) return fail(SaveError::BadVersion);
+    if (version != 7u && version != kFloorFileVersion)
+        return fail(SaveError::BadVersion);
     if (blobBytes > kMaxSnapBytes) return fail(SaveError::SizeMismatch);
     if (n - kFloorHeaderWire != static_cast<std::size_t>(blobBytes))
         return fail(SaveError::SizeMismatch);
@@ -2230,12 +2258,32 @@ bool floor_file_read(const std::uint8_t* bytes, std::size_t n, World& w,
     if (!take(4)) return fail(SaveError::SizeMismatch);
     br.u32(cnt);
     if (cnt > kMaxFloorRecords) return fail(SaveError::SizeMismatch);
-    if (!take(static_cast<std::size_t>(cnt) * 2)) return fail(SaveError::SizeMismatch);
-    ents.roomReps.resize(cnt);
-    for (std::int16_t& rep : ents.roomReps) {
-        std::uint16_t u = 0;
-        br.u16(u);
-        rep = static_cast<std::int16_t>(u);
+    if (version == 7u) {
+        if (!take(static_cast<std::size_t>(cnt) * 2))
+            return fail(SaveError::SizeMismatch);
+        for (std::uint32_t i = 0; i < cnt; ++i) {
+            std::uint16_t u = 0;
+            br.u16(u);
+            const std::int16_t repVal = static_cast<std::int16_t>(u);
+            if (repVal != 0) {
+                RoomDelta d{};
+                d.roomId = static_cast<std::uint16_t>(i + 1);
+                d.rep = repVal;
+                d.owner = 0;
+                ents.roomDeltas.push_back(d);
+            }
+        }
+    } else {
+        if (!take(static_cast<std::size_t>(cnt) * 6))
+            return fail(SaveError::SizeMismatch);
+        ents.roomDeltas.resize(cnt);
+        for (RoomDelta& d : ents.roomDeltas) {
+            std::uint16_t repU = 0;
+            br.u16(d.roomId);
+            br.u16(repU);
+            br.u16(d.owner);
+            d.rep = static_cast<std::int16_t>(repU);
+        }
     }
 
     // Геометрия — остаток blob. Валидируем ВЕСЬ поток ДО касания `w`

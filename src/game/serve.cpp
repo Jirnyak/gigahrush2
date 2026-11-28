@@ -138,26 +138,19 @@ int bag_slot_of(const Inventory& inv, ItemId item) {
     return -1;
 }
 
-// Предложение места по глаголу — объявлено + запас, ТО ЖЕ число, что у
-// `serve_pick` и `place_interest` (S12.4: «K чисел на комнату — всё предложение
-// целиком»). nullptr — коридор, ноль.
 std::int32_t place_offer(const Room* r, VerbId verb) {
     if (r == nullptr || verb >= kVerbCount) return 0;
     return static_cast<std::int32_t>(r->declared[verb]) + r->supply[verb];
 }
 
-// СКОЛЬКО МЕСТО ДАСТ НА САМОМ ДЕЛЕ — предложение за вычетом лежащего на полу
-// (пикапы деянием не изымаются, см. `pickup_offer`). ОДНО число на трёх
-// читателей: табличку F (`serve_place_verb`), пробу двери (`serve_start`) и
-// контактный кадр (`land_effect`). До 2026-11-14 первые два читали
-// `place_offer` с пикапами, а эффект их вычитал, — табличка обещала трапезу, окно
-// шло 20 с и садилось в ноль (ревью готового кода). Решение жителя
-// (`serve_pick`) остаётся на `place_offer`: это слагаемое ОДНОЙ суммы S13, и
-// разойтись с `place_interest` ему нельзя.
 std::int32_t place_points(Registry& reg, const FloorRooms& fr, RoomId room,
-                          const Room* r, LayerId layer, VerbId verb) {
-    if (r == nullptr) return 0;
-    return place_offer(r, verb) - pickup_offer(reg, fr, room, layer, verb);
+                          LayerId layer, VerbId verb) {
+    if (room == kNoRoom || room > fr.features.size() || verb >= kVerbCount)
+        return 0;
+    const std::int32_t offer =
+        static_cast<std::int32_t>(fr.room_declared(room)[verb]) +
+        fr.room_supply(room)[verb];
+    return offer - pickup_offer(reg, fr, room, layer, verb);
 }
 
 // МОЧА — `relief_urine@game/needs.h`: один дом на оба канала облегчения
@@ -167,11 +160,11 @@ std::int32_t place_points(Registry& reg, const FloorRooms& fr, RoomId room,
 // (`needs_body_total`: опорожняешься целиком где застало), у запасов — место
 // (`place_points`, ноль вне комнаты). Пересчитывается на КАЖДОМ кванте: «сколько
 // даёт место» — свойство места в момент деяния, лишнего состояния не нужно.
-float flow_total(Registry& reg, const FloorRooms& fr, RoomId room, const Room* r,
+float flow_total(Registry& reg, const FloorRooms& fr, RoomId room,
                  LayerId layer, VerbId verb) {
     const float body = needs_body_total(verb);
     if (body > 0.0f) return body;
-    const std::int32_t pts = place_points(reg, fr, room, r, layer, verb);
+    const std::int32_t pts = place_points(reg, fr, room, layer, verb);
     return pts > 0 ? static_cast<float>(pts) : 0.0f;
 }
 
@@ -191,23 +184,15 @@ float flow_effect(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
         return res.food + res.water + res.sleep;
     }
     const RoomId room = room_at_pos(ctx.fr, pos);
-    const Room* r = room_of(ctx.fr, room);
-    const float total = flow_total(ctx.reg, ctx.fr, room, r, layer, verb);
+    const float total = flow_total(ctx.reg, ctx.fr, room, layer, verb);
     const SatisfyResult sat = needs_satisfy(n, verb, total * share);
     // МОЧА — ПОКА ИДЁТ ПРОЦЕСС (решение владельца 2026-11-14: «процесс писанья
     // делает вероятность, что появится субвоксель мочи, каждый тик, покуда
     // процесс идёт»). Каждый тик окна облегчения (объём называет тело —
     // `needs_body_total`) НЕ у места, которое даёт сортир (предикат свидетеля
     // `room_offers`), роняет субвоксель `urine` с шансом
-    // `kReliefUrineAtoms / длина окна` — полный попис в среднем даёт лужицу из
-    // `kReliefUrineAtoms`, прерванный — сколько успело. Объём бара не считается
-    // («не переживай об объёмах — это игра»): пустое тело дверь не пустит
-    // (`Full`), начатое окно капает до конца. Прежняя форма «атом в начале
-    // окна» давала множить мочу прерываниями — абсурд по построению.
-    // Жребий детерминирован: хеш тела и ТИКА ОКНА (`lastTick` — последний
-    // отданный тик кванта), ни одного состояния. Тик окна, а не тик опроса:
-    // окно, опрошенное каждый тик и разом в конце, роняет те же атомы.
-    if (needs_body_total(verb) > 0.0f && !room_offers(r, verb) &&
+    // `kReliefUrineAtoms / длина окна`.
+    if (needs_body_total(verb) > 0.0f && !room_offers(ctx.fr, room, verb) &&
         ctx.world != nullptr && ctx.excreted != nullptr) {
         const float p = static_cast<float>(kReliefUrineAtoms) /
                         static_cast<float>(dur);
@@ -337,41 +322,32 @@ ServeRefusal serve_start(const ServeCtx& ctx, Entity e, NpcId id,
     const Transform* tr = ctx.reg.try_get<const Transform>(e);
     const LayerId layer = tr != nullptr ? tr->layer : LayerId{0};
     const RoomId room = room_at_pos(ctx.fr, pos);
-    const Room* r = room_of(ctx.fr, room);
+    const bool hasRoom = (room != kNoRoom && room <= ctx.fr.features.size());
 
     // ИСТОЧНИК ВЫБИРАЕТСЯ В НАЧАЛЕ ОКНА, и окно его помнит (`ActWindow::item`):
     // предмет своей сумки — тот, что выбран кнопкой; иначе расходуемое комнаты
     // первым (S24.3: если в ящике лежит то, чем утоляют, тело берёт ЭТО); иначе
-    // возможность места или тела. До окна-потока ящик выбирался на контактном
-    // кадре; теперь предмет берётся сразу — откусил, значит ешь.
+    // возможность места или тела.
     Lying lying;
     if (item != kInvalidItem) {
         if (bag_slot_of(ctx.pool.inventory(id), item) < 0)
             return ServeRefusal::NoItem;
-        // Глагол обязан быть глаголом ЭТОГО предмета: окно открывается строкой
-        // глагола, а эффект течёт строкой предмета, — разойдись они, длина
-        // была бы от одного, величина от другого.
         if (serve_item_verb(item) != verb) return ServeRefusal::NoRow;
-    } else if (r != nullptr) {
+    } else if (hasRoom) {
         lying = best_lying(ctx.reg, ctx.fr, room, layer, verb);
         if (lying.slot >= 0) item = lying.item;
     }
 
     ConsumeResult price{}; // цена предмета целиком — платится здесь, один раз
     if (item != kInvalidItem) {
-        // «Сытый хлеб не ест» — тем же законом, которым потечёт эффект: проба
-        // `apply_consumable` на копии. Ноль легшего = отказ.
         Needs probe = row;
         price = apply_consumable(probe, item, ctx.pool.hp(id));
         if (!price.used || price.food + price.water + price.sleep <= 0.0f)
             return ServeRefusal::Full;
     } else {
-        // Пробы ДВЕ, и это два разных вопроса: «есть ли куда расти вообще»
-        // (не хочется) и «даст ли место» (здесь нечем). У облегчения вторая
-        // проба при нуле места отвечает «да» — объём называет тело.
         if (would_gain(row, verb, kNeedMax) <= 0.0f) return ServeRefusal::Full;
-        if (would_gain(row, verb, flow_total(ctx.reg, ctx.fr, room, r, layer,
-                                             verb)) <= 0.0f)
+        if (would_gain(row, verb,
+                       flow_total(ctx.reg, ctx.fr, room, layer, verb)) <= 0.0f)
             return ServeRefusal::NoPlace;
     }
 
@@ -468,7 +444,7 @@ bool serve_begin(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
         return false;
 
     const RoomId room = room_at_pos(ctx.fr, pos);
-    const Room* r = room_of(ctx.fr, room);
+    const bool hasRoom = (room != kNoRoom && room <= ctx.fr.features.size());
     // СВОЯ СУМКА — ЧАСТЬ МЕСТА ПОД НОГАМИ (решение владельца 2026-11-14: «все
     // едят универсально, могут есть из инвентаря»): тот же вектор, что видит
     // одна сумма в `place_pick`. Коридор без сумки — по-прежнему «недоступно
@@ -477,28 +453,24 @@ bool serve_begin(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     carried_offer(ctx.pool.inventory(id), carried);
     bool anyCarried = false;
     for (std::size_t v = 0; v < kVerbCount; ++v) anyCarried |= carried[v] > 0;
-    if (r == nullptr && !anyCarried) {
+    if (!hasRoom && !anyCarried) {
         ++out.corridor;
         return false;
     }
 
     // СТРОКА НУЖД — ОДНА НА ВСЕХ РЕШАТЕЛЕЙ (`needs_row_for`, [game/needs.h]).
-    // Здесь стояло чтение пула напрямую плюс отказ при `seeded == 0`, и это
-    // был ВТОРОЙ ОТВЕТ: непросеянное тело проход ведения законно отправлял
-    // идти (подставив прокатанную строку), а деяние тому же телу молча
-    // отказывало — то есть «чего я хочу» и «что я делаю» считались по разным
-    // строкам одного тела. Нашёл аудит, а не прогон.
     const Needs row = needs_row_for(ctx.pool, id);
     DemandE3 demand[kVerbCount];
     demand_from_needs(row, demand);
-    // Та же пара строк, которой считает спрос проход ведения: один вектор
-    // ХОЧУ на тело, иначе «чего я хочу» и «что я делаю» разошлись бы.
     demand_add_health(static_cast<float>(ctx.pool.hp(id)),
                       static_cast<float>(ctx.pool.max_hp(id)), demand);
 
     std::int32_t offer[kVerbCount];
+    const auto decl = ctx.fr.room_declared(room);
+    const auto sup = ctx.fr.room_supply(room);
     for (std::size_t v = 0; v < kVerbCount; ++v)
-        offer[v] = place_offer(r, static_cast<VerbId>(v)) + carried[v];
+        offer[v] = (hasRoom ? (static_cast<std::int32_t>(decl[v]) + sup[v]) : 0) +
+                   carried[v];
     const ServePick p = serve_pick_offer(offer, demand);
     if (p.verb >= kVerbCount) {
         ++out.nothing;
@@ -511,8 +483,8 @@ bool serve_begin(const ServeCtx& ctx, Entity e, NpcId id, const vec3& pos,
     const Transform* tr = ctx.reg.try_get<const Transform>(e);
     const LayerId layer = tr != nullptr ? tr->layer : LayerId{0};
     const bool placeGives =
-        r != nullptr &&
-        (place_points(ctx.reg, ctx.fr, room, r, layer, p.verb) > 0 ||
+        hasRoom &&
+        (place_points(ctx.reg, ctx.fr, room, layer, p.verb) > 0 ||
          best_lying(ctx.reg, ctx.fr, room, layer, p.verb).slot >= 0);
     if (!placeGives) {
         Lying own;

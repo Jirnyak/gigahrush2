@@ -22,6 +22,8 @@
 #include "game/action.h"
 #include "game/look.h"
 #include "game/mob_spawn.h"
+#include "game/room.h"
+#include "game/save.h"
 
 using namespace giga;
 using namespace giga::game;
@@ -99,6 +101,25 @@ static_assert(std::is_trivially_copyable_v<BodyPart>);
 
 static_assert(sizeof(BodyParts) == 356, "BodyParts обязан быть ровно 356 байт (1 Б count + 8 * 44 Б + padding)!");
 static_assert(std::is_trivially_copyable_v<BodyParts>);
+
+// 1.3b Комнаты и дельта-сохранение (CANON S12/S18)
+static_assert(sizeof(RoomFeature) == 16, "RoomFeature обязан быть ровно 16 байт!");
+static_assert(alignof(RoomFeature) == 4);
+static_assert(std::is_trivially_copyable_v<RoomFeature>);
+static_assert(std::is_standard_layout_v<RoomFeature>);
+
+static_assert(sizeof(RoomRecord) == 8, "RoomRecord обязан быть ровно 8 байт!");
+static_assert(alignof(RoomRecord) == 2);
+static_assert(std::is_trivially_copyable_v<RoomRecord>);
+static_assert(std::is_standard_layout_v<RoomRecord>);
+
+static_assert(sizeof(RoomDelta) == 6, "RoomDelta обязан быть ровно 6 байт!");
+static_assert(alignof(RoomDelta) == 2);
+static_assert(std::is_trivially_copyable_v<RoomDelta>);
+static_assert(std::is_standard_layout_v<RoomDelta>);
+
+static_assert(sizeof(Room) == 136, "Room (композитный фасад) обязан быть ровно 136 байт!");
+static_assert(std::is_trivially_copyable_v<Room>);
 
 static_assert(std::is_trivially_copyable_v<ContactForm>);
 static_assert(std::is_standard_layout_v<ContactForm>);

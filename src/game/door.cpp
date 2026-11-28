@@ -124,8 +124,8 @@ void door_declare(Doors& doors, const FloorRooms& rooms, int number,
     // комнаты гермо — решает МОДУЛЬ при объявлении (падик метит квартирные
     // листья), не общая таксономия.
     auto hermetic_side = [&](int cx, int cy, int cz) {
-        const Room* r = room_of(rooms, room_at(rooms, cx, cy, cz));
-        return r != nullptr && (r->tags & kRoomTagHermetic) != 0;
+        const RoomId rid = room_at(rooms, cx, cy, cz);
+        return (rooms.room_tags(rid) & kRoomTagHermetic) != 0;
     };
 
     std::uint32_t shapeless = 0;

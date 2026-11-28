@@ -428,8 +428,8 @@ void bake_zone_partition(const FloorRooms& fr, const ClearanceField& oracle, int
                          GravityRegime gravity, ZonePartition& out) {
     (void)gravity; // раздутие о гравитации не знает: касание её не спрашивает
     out = ZonePartition{};
-    if (fr.roomAt.empty() || fr.list.empty()) return;
-    out.zones = static_cast<std::uint32_t>(fr.list.size());
+    if (fr.roomAt.empty() || fr.empty()) return;
+    out.zones = static_cast<std::uint32_t>(fr.size());
     out.at.assign(kMacroCells, kNoRoom);
     RoomId* at = out.at.data();
 

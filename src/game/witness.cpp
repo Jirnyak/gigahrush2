@@ -66,11 +66,11 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
 
     // Выцветание — секундный каданс, независимо от деяний.
     if (tick % static_cast<std::uint64_t>(kSimHz) == 0) {
-        for (Room& r : rooms.list) {
-            if (r.rep == 0) continue;
-            int step = r.rep / (1 << kRepDecayShift);
-            if (step == 0) step = r.rep > 0 ? 1 : -1;
-            r.rep = static_cast<std::int16_t>(r.rep - step);
+        for (RoomRecord& rec : rooms.records) {
+            if (rec.rep == 0) continue;
+            int step = rec.rep / (1 << kRepDecayShift);
+            if (step == 0) step = rec.rep > 0 ? 1 : -1;
+            rec.rep = static_cast<std::int16_t>(rec.rep - step);
         }
     }
 
@@ -120,10 +120,9 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
         // Индекс напрямую (RoomId = индекс+1): репутация пишется в НАШ
         // список, const-ручка room_of тут была бы враньём.
         const RoomId rid = room_at(rooms, dx, dy, dz);
-        Room* room = (rid != 0 && rid <= rooms.list.size())
-                         ? &rooms.list[rid - 1]
-                         : nullptr;
-        if (room_offers(room, verb)) {
+        const bool validRoom = (rid != kNoRoom && rid <= rooms.records.size());
+        RoomRecord* rec = validRoom ? &rooms.records[rid - 1] : nullptr;
+        if (validRoom && room_offers(rooms, rid, verb)) {
             ++out.free;
             continue;
         }
@@ -183,9 +182,9 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
 
             int delta = kVerbRelDelta[verb];
             // Своя территория: свидетель из фракции собственника комнаты.
-            if (room != nullptr && room->owner >= 1 &&
-                room->owner <= kFactionCount &&
-                static_cast<std::uint8_t>(room->owner - 1) == rowW)
+            if (rec != nullptr && rec->owner >= 1 &&
+                rec->owner <= kFactionCount &&
+                static_cast<std::uint8_t>(rec->owner - 1) == rowW)
                 delta = delta * kVerbTurfMultE3[verb] / 1000;
             // Своя жертва: жертва из фракции свидетеля.
             if (hasVictim && rowV == rowW)
@@ -202,37 +201,15 @@ WitnessTick witness_step(Registry& reg, NpcPool& pool, FactionRelations& rel,
             ++out.witnessed;
             // Репутация места — одна запись на комнату (S13.6), раз за
             // деяние, только ЗАМЕЧЕННОЕ: незамеченное не имеет цены нигде.
-            if (room != nullptr) {
-                const int nr = room->rep + kVerbRepDelta[verb];
-                room->rep = static_cast<std::int16_t>(
+            if (rec != nullptr) {
+                const int nr = rec->rep + kVerbRepDelta[verb];
+                rec->rep = static_cast<std::int16_t>(
                     nr < -32000 ? -32000 : (nr > 32000 ? 32000 : nr));
             }
-            // ПАМЯТЬ МИРА (S21): замеченное деяние становится фактом. Ровно
-            // здесь, под тем же `anyWitness`, под которым платится репутация:
-            // у цены и у памяти ОДНО условие — «это кто-то видел», и второго
-            // ответа на вопрос «попало ли в мир» быть не должно.
-            //
-            // Комната может быть kNoRoom (коридор, шахта, толща) — факт всё
-            // равно подшивается: место коридора есть место, а «рядом» по
-            // kNoRoom просто соберёт все коридорные факты этажа. Отсев по
-            // комнате был бы молчаливой потерей половины памяти этажа.
-            // ВРЕМЯ ФАКТА — ШТАМП ПРОДЮСЕРА (`ev.tick`), а не тик дренажа:
-            // кадр делает до восьми сим-подшагов, деяние случилось в СВОЁМ, и
-            // «что раньше» внутри кадра есть ровно та разница, за которой
-            // летопись и держит seq. Заодно это ПЕРВЫЙ ЧИТАТЕЛЬ `Event::tick`
-            // — поле штамповалось каждой публикацией и не читалось никем
-            // (перепись SKELETON.md IX.2: «событие штампуется временем,
-            // которое не читает никто» — вот почему в дереве не было ни одного
-            // временного предиката над прошлым).
-            //
-            // Ноль — документированное «штампа нет» у удобной перегрузки
-            // `publish` ([event_bus.h]), а не момент времени; такому деянию
-            // временем становится тик дренажа, иначе факт родился бы
-            // просроченным на всю историю мира и забылся бы тем же тиком.
             const std::uint64_t at = ev.tick != 0 ? ev.tick : tick;
             if (chron.file(at, verb, actorId,
                            hasVictim ? victim : kInvalidNpc, floor,
-                           room != nullptr ? rid : kNoRoom))
+                           rec != nullptr ? rid : kNoRoom))
                 ++out.filed;
         }
     }

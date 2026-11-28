@@ -141,6 +141,9 @@ inline constexpr std::int32_t kPlacePathCostPerCell = 1;
 // ярлык и счёт могли бы разойтись, что и есть вся болезнь двух решателей.
 std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
                             VerbId* topVerb = nullptr);
+std::int32_t place_interest(const FloorRooms& fr, RoomId id,
+                            const DemandE3 demand[kVerbCount],
+                            VerbId* topVerb = nullptr);
 
 // ЦЕЛЬ ХОДА — центр БЛИЖАЙШЕГО бокса композиции, и возвращается тороидальная
 // манхэттенская дистанция до него в клетках (−1, если боксов нет).
@@ -154,9 +157,12 @@ std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
 // грань настоящего пути — то, что требуется и отсечке бинов, и честной цене.
 int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int cz,
                       int& tx, int& ty, int& tz);
+int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
+                      int& tx, int& ty, int& tz);
 
 // ИЗДЕРЖКА — ЕДИНСТВЕННОЕ МЕСТО РАСШИРЕНИЯ (решение владельца 2 выше).
 std::int32_t place_cost(const FloorRooms& fr, const Room& r, int cx, int cy, int cz);
+std::int32_t place_cost(const FloorRooms& fr, RoomId id, int cx, int cy, int cz);
 
 // Штраф за каждое тело сверх вместимости `room_capacity(r)` (У1.7): равен шагу
 // одного бина (`kRoomBinEdge` = 8 клеток = 16 м) — переполнение уводит к
@@ -167,6 +173,8 @@ inline constexpr std::int32_t kRoomCrowdCostPerExtra = kRoomBinEdge;
 // Издержка переполнения комнаты `r` с точки `(cx, cy, cz)`. Если тело уже стоит
 // внутри этой комнаты, само себя в числе лишних тел оно не считает (`occ - 1`).
 std::int32_t place_crowd_cost(const FloorRooms& fr, const Room& r,
+                              int cx, int cy, int cz);
+std::int32_t place_crowd_cost(const FloorRooms& fr, RoomId id,
                               int cx, int cy, int cz);
 
 // Пересчитать занятость комнат `fr.occupants` по живым воплощённым телам слоя

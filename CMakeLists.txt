@@ -2810,10 +2810,10 @@ if(GIGA_BUILD_TESTS)
         # 245294 -> 245305 (+11, 2026-11-28):
         #   - `suite_needs.inl` (+5): `recovering_ambient_hermetic()` (kRoomTagHermetic + serve_holding);
         #   - `game_test.cpp` (+6): `test_floor_gen()` дифференциация материалов и геометрии через `PadicTheme`.
-        # 245305 -> 245316 (+11, 2026-11-28):
-        #   - `suite_perceive.inl` (+3): фикс дефекта 3b — нулевой/отрицательный `hearingMult` в `noise.cpp`;
-        #   - `suite_utilai.inl` (+8): проброс `Senses::heardSev -> Perception::gunfire` и прямое бегство от видимого врага (`sen->foe`).
-        PASS_REGULAR_EXPRESSION "game_test: 245316 checks, 0 failures")
+        # 245316 -> 245327 (+11, 2026-11-28):
+        #   - Increment C (`RoomFeature` 16 B + `RoomRecord` 8 B + `RoomDelta` 6 B + FloorFile v8):
+        #     layout/accessor checks in `suite_rooms_object.inl` and clean zero-delta floor v8 check in `suite_persist.inl`.
+        PASS_REGULAR_EXPRESSION "game_test: 245327 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

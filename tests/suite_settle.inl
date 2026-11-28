@@ -227,7 +227,7 @@ struct Census {
 Census census_of(Registry& ecs, const World& w, const FloorRooms& zones,
                  LayerId layer) {
     Census c;
-    std::vector<bool> seen(zones.list.size() + 1, false);
+    std::vector<bool> seen(zones.size() + 1, false);
     for (auto e : ecs.view<const NpcRef, const Transform, const AABB>()) {
         const Transform& tr = ecs.get<const Transform>(e);
         if (tr.layer != layer) continue;

@@ -47,6 +47,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "core/math.h"
@@ -612,6 +613,17 @@ struct PickupRecord {
 // gather_floor_entities на выходе с этажа, применяется spawn_*_records на
 // restore-ветке. Секции контейнеров/трупов/обломков в run.sav мертвы с v20 —
 // у состояния этажа ровно один дом.
+// ---------------------------------------------------------------------------
+// RoomDelta (6 Б) — разреженная дельта мутации состояния комнаты (floor v8)
+// ---------------------------------------------------------------------------
+struct RoomDelta {
+    std::uint16_t roomId = 0; // 1-based RoomId
+    std::int16_t rep = 0;     // репутация/отношение к игроку
+    std::uint16_t owner = 0;  // текущий владелец (если изменился или != base)
+};
+static_assert(sizeof(RoomDelta) == 6 && alignof(RoomDelta) == 2 &&
+              std::is_trivially_copyable_v<RoomDelta>);
+
 struct FloorEntityState {
     std::vector<PropRecord> props;
     std::vector<CorpseRecord> corpses;
@@ -622,12 +634,8 @@ struct FloorEntityState {
     // же клетки на всех этажах — межэтажный дефект умер этой же правкой) и
     // восстанавливается отсюда на restore.
     std::vector<std::uint64_t> powerKeys;
-    // Репутация комнат (S13.6, решение владельца 2026-09-05: «здесь
-    // убивали» переживает выгрузку этажа — S20.6 «этаж помнит всё»).
-    // НАКОПЛЕННОЕ, не декларация (закон масок S18): комнаты пересоздаются
-    // rooms_declare детерминированно, порядок объявления и есть ключ —
-    // секция пишется по индексу комнаты, без id.
-    std::vector<std::int16_t> roomReps;
+    // Дельты комнат (v8, S18): только комнаты с rep != 0 || owner != baseOwner.
+    std::vector<RoomDelta> roomDeltas;
 };
 
 // Проводные ширины записей. Якорь: клетка 3×u8 (макро-координаты — байты по
@@ -694,7 +702,7 @@ inline constexpr std::uint32_t kFloorMagic = 0x46324847u; // 'G','H','2','F'
 // этаж весит десятки байт / единицы КиБ вместо 158 МиБ. Без ключа/базы (или
 // в тестах с кастомным миром без базы) используется полный RLE-снимок mode=0.
 // Старые v6-файлы отклоняются целиком (BadVersion) — этаж перегенерируется.
-inline constexpr std::uint32_t kFloorFileVersion = 7u;
+inline constexpr std::uint32_t kFloorFileVersion = 8u;
 inline constexpr std::size_t kFloorHeaderWire = 16;
 
 // Encode the World + сущности этажа into a complete floor file
@@ -918,6 +926,7 @@ void restore_power_keys(PowerGridState& power, const std::uint64_t* keys,
 // молча отбрасывается — декларация главнее накопленного.
 void restore_room_reps(FloorRooms& rooms, const std::int16_t* reps,
                        std::size_t n);
+void restore_room_deltas(FloorRooms& rooms, std::span<const RoomDelta> deltas);
 
 // ---------------------------------------------------------------------------
 // Coming back to where you stood

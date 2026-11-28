@@ -1036,21 +1036,26 @@ Entity place_prop_hanging(Registry& reg, const World& world, LayerId layer,
                               yaw, animPhase, /*flags*/ 0);
 }
 
-bool prop_fits_room(PropId id, const Room& r) {
+bool prop_fits_room(PropId id,
+                    std::span<const std::int16_t, kVerbCount> declared) {
     if (!prop_valid(id)) return false;
     const std::array<std::int16_t, kVerbCount>& pv =
         kPropVerbs[static_cast<std::size_t>(id)];
     for (std::size_t v = 0; v < kVerbCount; ++v)
-        if (pv[v] > 0 && r.declared[v] >= pv[v]) return true;
+        if (pv[v] > 0 && declared[v] >= pv[v]) return true;
     return false;
+}
+
+bool prop_fits_room(PropId id, const Room& r) {
+    return prop_fits_room(id, r.declared);
 }
 
 int room_stand_spots(const World& world, const FloorRooms& rooms,
                      std::uint16_t id, std::uint32_t salt, StandSpot* out,
                      int max) {
     if (out == nullptr || max <= 0) return 0;
-    const Room* room = room_of(rooms, id);
-    if (room == nullptr) return 0;
+    const auto boxes = rooms.room_boxes(id);
+    if (boxes.empty()) return 0;
     const MacroGrid& grid = world.grid();
     const SeedFaces faces = seed_faces(world.gravity());
 
@@ -1060,8 +1065,7 @@ int room_stand_spots(const World& world, const FloorRooms& rooms,
     const int cap = max > kMaxStandSpots ? kMaxStandSpots : max;
     int n = 0;
 
-    for (std::uint32_t bi = 0; bi < room->boxCount; ++bi) {
-        const RoomBox& b = rooms.boxes[room->boxFirst + bi];
+    for (const RoomBox& b : boxes) {
         for (int dz = 0; dz < b.sz; ++dz)
             for (int dy = 0; dy < b.sy; ++dy)
                 for (int dx = 0; dx < b.sx; ++dx) {
@@ -1565,11 +1569,10 @@ std::uint32_t stamp_shield_programs(Registry& reg, const FloorRooms* rooms,
             const int cy = static_cast<int>(tr.pos.y / kCellSize);
             const int cz = static_cast<int>(tr.pos.z / kCellSize);
             const RoomId rid = room_at(*rooms, cx, cy, cz);
-            const Room* r = room_of(*rooms, rid);
             // Программа — из ДАННЫХ модуля, не из ветки по виду (правило
             // владельца 2026-08-23): объявил «спать» — район дышит жилым
             // ритмом; коридор/цех/улица — круглосуточно.
-            if (r != nullptr && r->declared[kVerbSleep] > 0)
+            if (rid != kNoRoom && rooms->room_declared(rid)[kVerbSleep] > 0)
                 std::copy(std::begin(kDwellLevels), std::end(kDwellLevels),
                           std::begin(prog.levels));
         }

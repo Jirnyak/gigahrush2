@@ -27,7 +27,9 @@
 // Pure game-layer: no SDL/Vulkan. Headless-tested (suite_rooms_object).
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -54,29 +56,47 @@ struct RoomBox {
     std::uint8_t sx = 0, sy = 0, sz = 0; // size >= 1 по каждой оси
 };
 
+// ---------------------------------------------------------------------------
+// RoomFeature (16 Б) — неизменяемая геометрическая и авторская фича (S18)
+// ---------------------------------------------------------------------------
+struct RoomFeature {
+    std::uint32_t boxFirst = 0;         // композиция: боксы в общем пуле FloorRooms
+    std::uint16_t boxCount = 0;         // число боксов композиции
+    std::uint16_t cells = 0;            // Σ проштампованных клеток (вместимость, гейты)
+    std::uint16_t tags = 0;             // маска kRoomTag*
+    std::uint16_t baseOwner = 0;        // исходный автор/фракция при генерации
+    std::uint8_t declaredArchetype = 0; // индекс профиля в FloorRooms::declaredArchetypes
+    std::uint8_t reserved_ = 0;
+    std::uint16_t reserved2_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// RoomRecord (8 Б) — горячее изменяемое состояние комнаты в макросиме (S18)
+// ---------------------------------------------------------------------------
+struct RoomRecord {
+    std::int16_t rep = 0;         // репутация/отношение к игроку
+    std::uint16_t owner = 0;      // текущий владелец (может отличаться от baseOwner)
+    std::uint16_t supplyIdx = 0;  // слот в FloorRooms::supplies (0 = нулевой)
+    std::uint16_t occupants = 0;  // текущая занятость (живых тел внутри + в пути)
+};
+
+// Композитный фасад для тестов и легаси-вызовов (строго 136 Б).
 struct Room {
     std::uint16_t tags = 0;
     // КОДИРОВКА СОБСТВЕННИКА (S14.3, посажена свидетельством S19):
     // 0 = ничья; 1..kFactionCount = фракция (значение-1); значения выше —
     // резерв под персонального владельца (NpcHandle), когда появится
-    // потребитель. НАЗНАЧЕНИЕ владельцев — политика МОДУЛЯ (S10) и ещё не
-    // посажена: механика свидетеля читает поле и мирно спит на 0.
+    // потребитель.
     std::uint16_t owner = 0;
     // РЕПУТАЦИЯ КОМНАТЫ (S13.6/S19.4): одна запись, знак = «здесь лечили» /
-    // «здесь убивали», выцветает в witness_step. НАКОПЛЕННОЕ, не декларация:
-    // комната пересоздаётся на входе (закон 2), а rep ПЕРЕЖИВАЕТ выгрузку
-    // этажа секцией floor-файла v5 по индексу объявления (решение владельца
-    // 2026-09-05, S20.6 «этаж помнит всё» — save.h roomReps).
+    // «здесь убивали», выцветает в witness_step.
     std::int16_t rep = 0;
     std::uint32_t boxFirst = 0; // композиция: боксы в общем пуле FloorRooms
     std::uint16_t boxCount = 0;
     std::uint16_t cells = 0;    // Σ проштампованных клеток (вместимость, гейты)
-    // S12.4: ОБЪЯВЛЕНО — неразрушимая часть предложения. Работает с генерации,
-    // до всякой расстановки; сожгли диван — вернулось сюда, а не к нулю.
+    // S12.4: ОБЪЯВЛЕНО — неразрушимая часть предложения.
     std::int16_t declared[kVerbCount] = {};
-    // S12.4: кэш предложения. Сегодня живут ОСНАЩЕНИЕ+ЗАПАС (room_supply.h);
-    // СРЕДА/ФОРМА/НАРОД приезжают со своими системами. i32: Σ по богатой
-    // комнате (нажива = рубли) переполняет i16 честной кучей хабара.
+    // S12.4: кэш предложения (supply).
     std::int32_t supply[kVerbCount] = {};
 };
 
@@ -123,18 +143,25 @@ inline std::size_t room_bin_index(int bx, int by, int bz) {
 // при компиляции в place.cpp, где видны оба заголовка).
 inline constexpr std::uint32_t kRoomBodiesPerCell = 4;
 
-inline std::uint32_t room_capacity(const Room& r) {
-    return static_cast<std::uint32_t>(r.cells) * kRoomBodiesPerCell;
+inline std::uint32_t room_capacity(std::uint16_t cells) noexcept {
+    return static_cast<std::uint32_t>(cells) * kRoomBodiesPerCell;
+}
+inline std::uint32_t room_capacity(const Room& r) noexcept {
+    return room_capacity(r.cells);
+}
+inline std::uint32_t room_capacity(const RoomFeature& f) noexcept {
+    return room_capacity(f.cells);
 }
 
-// Комнаты одного этажа: плотный список + пул боксов + плоский индекс.
+// Комнаты одного этажа: плотные SoA-таблицы фич (16 Б) и мутируемого состояния
+// (8 Б) + пулы объявленных профилей и разреженных запасов + плоский roomAt.
 // Пересоздаётся на каждом входе (закон 2) — в снимок этажа не едет.
 struct FloorRooms {
-    std::vector<Room> list;      // плотный, без дыр; RoomId = индекс + 1
-    // Занятость комнат (У1.7): параллельный `list` плотный вектор числа тел
-    // (стоящих внутри + уже направленных туда), без ломки sizeof(Room) == 136.
-    std::vector<std::uint16_t> occupants;
-    std::vector<RoomBox> boxes;  // композиции всех комнат, подряд
+    std::vector<RoomFeature> features; // неизменяемые фичи этажа; RoomId = индекс + 1
+    std::vector<RoomRecord> records;   // горячее изменяемое состояние комнат
+    std::vector<RoomBox> boxes;        // композиции всех комнат, подряд
+    std::vector<std::array<std::int16_t, kVerbCount>> declaredArchetypes;
+    std::vector<std::array<std::int32_t, kVerbCount>> supplies;
     std::vector<RoomId> roomAt;  // kMacroDim^3, u16; пуст до rooms_reset
     // Бины: какие комнаты пересекают объём бина (комната может лежать в
     // нескольких — дедуп на обходе штампом эпохи, GoalsScratch).
@@ -155,6 +182,48 @@ struct FloorRooms {
     std::uint32_t overlapCells = 0;
     // Отказы room_declare (пустая композиция, нулевой размер). Гейт: 0.
     std::uint32_t refused = 0;
+
+    [[nodiscard]] std::size_t size() const noexcept { return features.size(); }
+    [[nodiscard]] bool empty() const noexcept { return features.empty(); }
+
+    [[nodiscard]] std::uint16_t room_tags(RoomId id) const noexcept {
+        return (id != kNoRoom && id <= features.size()) ? features[id - 1].tags : 0u;
+    }
+    [[nodiscard]] std::uint16_t room_owner(RoomId id) const noexcept {
+        return (id != kNoRoom && id <= records.size()) ? records[id - 1].owner : 0u;
+    }
+    [[nodiscard]] std::int16_t room_rep(RoomId id) const noexcept {
+        return (id != kNoRoom && id <= records.size()) ? records[id - 1].rep : 0;
+    }
+    [[nodiscard]] std::uint16_t room_cells(RoomId id) const noexcept {
+        return (id != kNoRoom && id <= features.size()) ? features[id - 1].cells : 0u;
+    }
+    [[nodiscard]] std::uint32_t room_capacity(RoomId id) const noexcept {
+        return giga::game::room_capacity(room_cells(id));
+    }
+    [[nodiscard]] std::span<const RoomBox> room_boxes(RoomId id) const noexcept {
+        if (id == kNoRoom || id > features.size()) return {};
+        const auto& f = features[id - 1];
+        if (f.boxFirst + f.boxCount > boxes.size()) return {};
+        return {boxes.data() + f.boxFirst, f.boxCount};
+    }
+    [[nodiscard]] std::span<const std::int16_t, kVerbCount> room_declared(
+        RoomId id) const noexcept {
+        static constexpr std::array<std::int16_t, kVerbCount> kZeroDeclared{};
+        if (id == kNoRoom || id > features.size()) return kZeroDeclared;
+        const std::uint8_t arch = features[id - 1].declaredArchetype;
+        if (arch >= declaredArchetypes.size()) return kZeroDeclared;
+        return declaredArchetypes[arch];
+    }
+    [[nodiscard]] std::span<const std::int32_t, kVerbCount> room_supply(
+        RoomId id) const noexcept {
+        static constexpr std::array<std::int32_t, kVerbCount> kZeroSupply{};
+        if (id == kNoRoom || id > records.size()) return kZeroSupply;
+        const std::uint16_t sidx = records[id - 1].supplyIdx;
+        if (sidx >= supplies.size()) return kZeroSupply;
+        return supplies[sidx];
+    }
+    [[nodiscard]] Room room(RoomId id) const noexcept;
 };
 
 // Очистить и подготовить к объявлениям нового этажа (аллоцирует roomAt).
@@ -168,9 +237,14 @@ RoomId room_declare(FloorRooms& fr, const RoomBox* boxes, int boxCount,
                     std::uint16_t tags, std::uint16_t owner,
                     const std::int16_t* declared = nullptr);
 
+// Выделить/вернуть мутабельный слот запаса для комнаты.
+std::array<std::int32_t, kVerbCount>& room_ensure_supply(FloorRooms& fr, RoomId id);
+
 // Поднять потолки всех бинов комнаты до её текущего declared+supply.
 // Зовут room_declare и supply-хуки (падение supply потолок не опускает —
 // он верхний по построению, как maxOffer).
+void rooms_bin_ceil_raise(FloorRooms& fr, RoomId id);
+void rooms_bin_ceil_raise(FloorRooms& fr, const RoomFeature& feat);
 void rooms_bin_ceil_raise(FloorRooms& fr, const Room& r);
 
 // В какой комнате клетка (wrap по всем осям). kNoRoom = коридор/толща.
@@ -181,10 +255,6 @@ void rooms_bin_ceil_raise(FloorRooms& fr, const Room& r);
 // карв, а `roomAt` по закону S18 есть чистая функция (kind, number, seed) и не
 // меняется ничем после объявления. Решение владельца 2026-10-06.
 RoomId room_at(const FloorRooms& fr, int x, int y, int z);
-
-
-const Room* room_of(const FloorRooms& fr, RoomId id);
-Room* room_of(FloorRooms& fr, RoomId id);
 
 // Текущая занятость комнаты `id` (тел внутри + нацеленных туда). 0 для kNoRoom
 // или вне диапазона.
@@ -197,12 +267,14 @@ void rooms_occupants_clear(FloorRooms& fr);
 // УМЕСТНО ЛИ ЗДЕСЬ ЭТО ДЕЯНИЕ (S19.1.3): комната САМА предлагает глагол —
 // объявлено или в запасе. Один предикат на двух читателей: свидетель зануляет
 // по нему цену деяния (`witness_step`), дверь утоления — не льёт лужу при
-// облегчении (`serve.cpp`). Две копии этого условия разошлись бы молча: лужа
-// оказалась бы там, где свидетель видит уместность (ревью 2026-11-14).
-// nullptr (коридор) — неуместно.
+// облегчении (`serve.cpp`).
 inline bool room_offers(const Room* r, VerbId v) {
     return r != nullptr && v < kVerbCount &&
            (r->declared[v] > 0 || r->supply[v] > 0);
+}
+inline bool room_offers(const FloorRooms& fr, RoomId id, VerbId v) noexcept {
+    if (id == kNoRoom || v >= kVerbCount) return false;
+    return fr.room_declared(id)[v] > 0 || fr.room_supply(id)[v] > 0;
 }
 
 // Псевдонимы модуля (решение владельца 2026-08-28, образец named_rooms.ts
@@ -256,6 +328,8 @@ RoomId room_find_alias(const FloorRooms& fr, std::uint32_t aliasHash);
 #include "core/row_law.h"
 
 GIGA_ROW_BYTES(giga::game::RoomBox, 6);
+GIGA_ROW_BYTES(giga::game::RoomFeature, 16);
+GIGA_ROW_BYTES(giga::game::RoomRecord, 8);
 GIGA_ROW_BYTES(giga::game::Room, 136);
 
 GIGA_PO2(giga::game::kRoomBinDim);
