@@ -1036,7 +1036,10 @@ if(GIGA_BUILD_TESTS)
         # `test_debris_settled_bubble` — одиночные тела (`chain == 0`), не
         # замёрзшие в полёте, заморозка осевших вне 64 м, класс-1 бит-в-бит
         # коммутация ∞ vs R=64 м, защита `CarriedBy` от накопления тишины.
-        PASS_REGULAR_EXPRESSION "16141/16141 checks passed"
+        # 16141 + 1 = 16142 на 2026-11-28 (bf6c2efd): `test_carve_clears_stain` —
+        #   последнее пятно клетки вырезано -> страница сдана (`!paged`) плюс
+        #   чтение нуля; пин в том коммите не подняли — поднят здесь.
+        PASS_REGULAR_EXPRESSION "16142/16142 checks passed"
     ) # The deliberately-red audit findings get their own target and their own exit code.
     # They used to be #included into game_test, which meant game_test returned 1 while
     # any finding stood — so ctest reported one bit, "game_test failed", identically
@@ -2790,6 +2793,22 @@ if(GIGA_BUILD_TESTS)
         #     света (round-trip, ключ, порча, MISS/HIT);
         #   - `suite_rooms_object.inl` (+17): `Room::owner` из `FloorSpec::factionMix`;
         #   - `suite_rpg.inl` + `suite_utilai.inl` (+63): `capability` + `Perception`.
+        # 245294 -> 245305 (+11, 2026-11-28, 3a9e5465):
+        #   - `suite_perceive.inl` (+3): фикс дефекта 3b — нулевой/отрицательный `hearingMult` в `noise.cpp`;
+        #   - `suite_utilai.inl` (+8): проброс `Senses::heardSev -> Perception::gunfire` и прямое бегство от видимого врага (`sen->foe`).
+        #   (+11 коммита 6331faae — гермо-реген и PadicTheme — сняты его откатом:
+        #   облик этажа — модуль, не тема; лечение — частный случай единой системы эффектов.)
+        # 245327 -> 245435 (+108, 2026-11-28):
+        #   - Increment D (`RoomTargetAnchor`, `rooms_bake_anchors`, `Settlement::byOwner`, `cell_stand_slot_eval` Grade 1/2):
+        #     `suite_settle.inl` (faction ownership + exit clearance across 5 FloorKinds + trap/hole gates)
+        #     and `suite_place.inl` (`test_place_target_anchor_support_and_isotropy`).
+        # 245435 -> 245424 (−11, откат 6331faae поверх C/D: −5 гермо-реген, −6 различение видов этажей).
+        # 245424 -> 245362 (−62, 2026-11-28, ИИ по решениям владельца): сняты ритм по
+        #   часам (`rhythm_bias`, suite_behaviours §19 — часы читает МОДУЛЬ данными,
+        #   CANON S15.4), `AiEnv` (глобальная фаза самосбора и тег гермо в решателе —
+        #   самосбор приходит через мир, укрытие — эффект зоны S29), фолбэк врага
+        #   сквозь стены (тесты utilai 16a–d/17a переведены на `Senses`, S25.8) и
+        #   собственный пеленг бегства (17c, вторая половина; S25 «своих движений ноль»).
         # 245362 -> 245363 (+1, 2026-11-28): прибытие снова по зоне (§88/E) поверх
         #   инкремента D — тест якоря цели (suite_place) ставит тело в коридор и
         #   делает второй тик хода (якорь спрашивает проверка прибытия).

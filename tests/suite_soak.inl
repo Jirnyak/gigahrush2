@@ -132,7 +132,7 @@ static void run_soak_3000_ticks_with_save_cycle() {
             excreted.clear();
             (void)needs_step(curReg, curPool, curLayer, kSimDt, nullptr,
                              static_cast<double>(tick) * kSimDt, &bus, tick,
-                             &curW, &excreted, &fr);
+                             &curW, &excreted);
 
             (void)finalize_deaths(curReg, curStack, curPool, bus, tick);
 
