@@ -11,7 +11,7 @@
 > **Universal 3D Voxel Core Engine & Emerging Society Simulation Engine**
 > Authored by **Graf Irnyak (Klaus Schwab)** & **Adolf Petushkov** (2026).
 
-[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [🗺️ Master Docs Index](.agents/INDEX.md) &nbsp;·&nbsp; [⚠️ THE HAMMER](.agents/THE_HAMMER_MASTER_PROMPT.md) &nbsp;·&nbsp; [🦴 Карта кода (SKELETON)](SKELETON.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
+[🌐 Live Showcase](https://Jirnyak.github.io/gigahrush2/) &nbsp;·&nbsp; [🦴 Карта кода (SKELETON)](SKELETON.md) &nbsp;·&nbsp; [📜 Agent Mandates](AGENTS.md)
 
 </div>
 
@@ -197,7 +197,8 @@ cmake --build build -j
 # Run headless verification suite
 ctest --test-dir build --output-on-failure
 
-# Stage a self-contained install directory (binary + shaders/*.spv + data/textures/*.ktx2)
+# Stage an install directory (binary + shaders/*.spv + data/textures/*.ktx2).
+# NOT self-contained on macOS: dylibs are bundled only by the CI Package step.
 cmake --install build --prefix dist/gigahrush2
 ```
 

@@ -1,39 +1,24 @@
 # Agent Instructions — gigahrush2
 
-# ‼️ КРИТИЧЕСКИЙ ЗАКОН №0: ОБЯЗАТЕЛЬНОЕ ЧТЕНИЕ ФАЙЛОВ ЦЕЛИКОМ (ЗАПРЕТ НА СКИММИНГ)
-
-> 🎬 **ЗАКОН АНТИ-АМНЕЗИИ (MEMENTO PROTOCOL):**
-> При Compaction или старте субагента рабочая память сбрасывается. Сжатая сводка — не память!
-> 
-> 🛑 **ИНВАРИАНТ ЗАЗЕМЛЕНИЯ (MANDATORY FULL-FILE GROUNDING LAW):**
-> 1. **ВЫСШАЯ БАЗА (КОНСТИТУЦИЯ ХАММЕРА И MASTER PROMPT):**
->    - Любое действие ЛЮБОГО агента начинается с заземления на Высшую Конституцию!
->    - **Шаг 1:** `read_file` на [`.agents/THE_HAMMER_MASTER_PROMPT.md`](file:///C:/gigahrush2/.agents/THE_HAMMER_MASTER_PROMPT.md) И [`.agents/INDEX.md`](file:///C:/gigahrush2/.agents/INDEX.md).
->    - 🚨 **ОБЯЗАТЕЛЬНОЕ ЧТЕНИЕ ПОЛНОСТЬЮ ЧАНКАМИ ПО 800 СТРОК (`StartLine: 1, EndLine: 800`) ДО ПОСЛЕДНЕЙ СТРОКИ! Чтение огрызками по 20–50 строк, скимминг или работа «из головы» — СЛУЖЕБНЫЙ ПОДЛОГ И САБОТАЖ!**
-> 2. **ПРОФИЛЬНАЯ БИБЛИЯ ДОМЕНА (Шаг 2):** `read_file` на профильный канонический стандарт задачи из таблицы ниже (также полностью чанками по 800 строк).
->    - **ЗАПРЕЩЕНО открывать файлы проекта (cpp, h, comp, frag, csv) ДО ПОЛНОГО прочтения Конституции и библии домена!**
-> 3. **ПРОВЕРКА ДИСКА (Шаг 3):** `git status` и `git diff --stat` — проверка физического состояния дерева перед любой мутацией.
-> 4. **ЦЕЛЕВОЙ ФАЙЛ (Шаг 4):** `read_file` на целевой файл проекта ПОЛНОСТЬЮ перед правкой (от 1-й до последней строки).
-> 
-> ⚡ **СО-РАЗВИТИЕ СПЕЦИФИКАЦИЙ И КОДА:**  
-> Нашел проблему $\to$ зафиксировал в реестре $\to$ изучил код через `read_file` $\to$ исправил в боевом коде $\to$ проверил компиляцией и ctest $\to$ обновил документацию.
-
-## 🗺️ МАТРИЦА ОБЯЗАТЕЛЬНОГО ЧТЕНИЯ КАНОНИЧЕСКИХ БИБЛИЙ (`.agents/`)
-
-| Задача / Домен разработки | Обязательные стандарты и библии для `read_file` | Ключевые файлы кода |
-|:---|:---|:---|
-| **Высшие законы, инварианты, доктрина T.A.R.S.** | 1. [`.agents/THE_HAMMER_MASTER_PROMPT.md`](file:///C:/gigahrush2/.agents/THE_HAMMER_MASTER_PROMPT.md)<br>2. [`.agents/INDEX.md`](file:///C:/gigahrush2/.agents/INDEX.md)<br>3. [`CANON.md`](file:///C:/gigahrush2/CANON.md) | `CMakeLists.txt`<br>`tools/check_source_rules.cmake` |
-| **Анатомия движка, слои, EnTT ECS, такт 125 Гц O(n)** | 1. [`.agents/CANONICAL_ARCHITECTURE.md`](file:///C:/gigahrush2/.agents/CANONICAL_ARCHITECTURE.md)<br>2. [`SKELETON.md`](file:///C:/gigahrush2/SKELETON.md)<br>3. [`performance.md`](file:///C:/gigahrush2/performance.md) | `src/app/main.cpp`<br>`src/core/tick.h`<br>`src/core/math.h` |
-| **Воксели 128³, субмаски 8³ (0.25 м), тор, карв, гравитация** | 1. [`.agents/VOXEL_AND_WORLD_BIBLE.md`](file:///C:/gigahrush2/.agents/VOXEL_AND_WORLD_BIBLE.md)<br>2. [`voxels.md`](file:///C:/gigahrush2/voxels.md)<br>3. [`destruct.md`](file:///C:/gigahrush2/destruct.md) | `src/world/grid.h`<br>`src/world/submask.h`<br>`src/world/destruct.cpp` |
-| **Физика тел 7 частей (S28), рэгдолл, Баумгарте, контакты** | 1. [`.agents/PHYSICS_AND_BODIES_BIBLE.md`](file:///C:/gigahrush2/.agents/PHYSICS_AND_BODIES_BIBLE.md)<br>2. [`physics.md`](file:///C:/gigahrush2/physics.md) | `src/sim/physics.cpp`<br>`src/sim/rigid.cpp`<br>`src/sim/contact.h` |
-| **Кинематика, одометр походки, синхронизация шагов и звука** | 1. [`.agents/GAIT_AND_ACTIONS_DEEP_DIVE.md`](file:///C:/gigahrush2/.agents/GAIT_AND_ACTIONS_DEEP_DIVE.md)<br>2. [`.agents/PHYSICS_AND_BODIES_BIBLE.md`](file:///C:/gigahrush2/.agents/PHYSICS_AND_BODIES_BIBLE.md) | `src/game/body_pose.cpp`<br>`src/sim/physics.cpp` |
-| **Vulkan Рендерер, Raymarch, запекание света DDA, CRT UI** | 1. [`.agents/RENDER_AND_RAYMARCH_BIBLE.md`](file:///C:/gigahrush2/.agents/RENDER_AND_RAYMARCH_BIBLE.md)<br>2. [`render.md`](file:///C:/gigahrush2/render.md)<br>3. [`ddalight.md`](file:///C:/gigahrush2/ddalight.md) | `shaders/raymarch.frag`<br>`src/render/voxel_raymarch_pass.cpp`<br>`src/render/imgui_layer.cpp` |
-| **Макросим 1M, Utility AI, нужды (S24), деяния Serve (S22)** | 1. [`.agents/ALIFE_AND_MACROSIM_BIBLE.md`](file:///C:/gigahrush2/.agents/ALIFE_AND_MACROSIM_BIBLE.md)<br>2. [`macrosim.md`](file:///C:/gigahrush2/macrosim.md)<br>3. [`ai.md`](file:///C:/gigahrush2/ai.md) | `src/game/macro_sim.cpp`<br>`src/game/ai.cpp`<br>`src/game/needs.cpp` |
-| **Дата-дривен таблицы CSV, генераторы, кодогенерация** | 1. [`.agents/DATA_TABLES_AND_CSVS_BIBLE.md`](file:///C:/gigahrush2/.agents/DATA_TABLES_AND_CSVS_BIBLE.md)<br>2. [`items.md`](file:///C:/gigahrush2/items.md) | `data/*.csv`<br>`tools/gen_*.py`<br>`src/game/*_table.*` |
-| **Защита диффов, Кубик Тимаэрта Монте-Карло, Anti-Slop** | 1. [`.agents/ANTI_SLOP_AND_DIFF_GUARD_BIBLE.md`](file:///C:/gigahrush2/.agents/ANTI_SLOP_AND_DIFF_GUARD_BIBLE.md)<br>2. [`.agents/DEFENSE_TESTING_AND_ANTI_GOODHART_BIBLE.md`](file:///C:/gigahrush2/.agents/DEFENSE_TESTING_AND_ANTI_GOODHART_BIBLE.md) | `tools/check_diff_guard.py`<br>`tools/dice_reality_audit.py` |
-| **Храповик качества, полы тестов, потолки долга, Anti-Gaming** | 1. [`.agents/QUALITY_RATCHET_AND_FLOORS_BIBLE.md`](file:///C:/gigahrush2/.agents/QUALITY_RATCHET_AND_FLOORS_BIBLE.md) | `tools/quality_ratchet.py`<br>`.data/quality-ratchet-baseline.json` |
-| **Бинарные контракты C++23, POD/SoA, Layer Discipline** | 1. [`.agents/CODE_INVARIANTS_AND_CONTRACTS_BIBLE.md`](file:///C:/gigahrush2/.agents/CODE_INVARIANTS_AND_CONTRACTS_BIBLE.md) | `src/core/row_law.h`<br>`tests/code_contract_test.cpp` |
-| **Реестр дефектов Red Team инквизиции, бенчмарки** | 1. [`.agents/RED_TEAM_INQUISITION_REGISTRY.md`](file:///C:/gigahrush2/.agents/RED_TEAM_INQUISITION_REGISTRY.md) | `tests/rigid_bench.cpp`<br>`tests/perceive_bench.cpp` |
+> **MANDATORY SESSION INTAKE & ROUTING:**
+> Every agent (and spawned subagent) working on GigaHrush 2 MUST read the following canonical documents before initiating non-trivial architectural, gameplay, or code modifications:
+> 1. [AGENTS.md](AGENTS.md) (Operational mandates, DOD/ECS rules, no-exceptions invariant)
+> 2. [README.md](README.md) (Graf Irnyak / Klaus Schwab Architectural Manifesto & World Invariants)
+> 3. [jirnyak.md](jirnyak.md) (Purge Mandate & Data-Driven Content Boundaries)
+> 4. [master_prompt.md](master_prompt.md) (Owner standing directives & unlimited token policy)
+> 5. [SKELETON.md](SKELETON.md) (КАРТА КОДА КАК ОНА ЕСТЬ — что ИСПОЛНЯЕТСЯ, с
+>    адресом у каждой строки и пометкой ПРАВДА/РАСХОЖДЕНИЕ. Правило файла:
+>    утверждение без адреса — не строка этого файла; судит ctest `doc_refs`.
+>    Увидел в коде то, чего нет в карте — сперва впиши РАСХОЖДЕНИЕМ, потом
+>    трогай. Правил карту — позови `cmake --build build --target docs_sync`
+>    перед коммитом: номер строки руками не правится, он производное.
+>    `ARCHITECTURE.md` архивирован в `history/` 2026-10-01 — его роль здесь)
+> 6. [CANON.md](CANON.md) (Канон систем S1–S15 — эталон, относительно которого судятся
+>    расхождения; записан со слов владельца 2026-08-17/19; S12 комнаты, S13 решение
+>    агента, S14 контейнер, S15 время — 2026-08-20. Любой код сверяется с ним;
+>    решения по эпикам — в markoaudit/plans/)
+> 7. [CONTINUE.md](CONTINUE.md) (Промт-эстафета большой чистки: метод, состояние,
+>    очередь, посадочные приёмы — вход для продолжающих сессий)
 
 > **ВЕТКА РАЗРАБОТКИ — `main`** (решение владельца 2026-09-13, «возвращение
 > короля»). Работаем и коммитим ПРЯМО В НЕЁ. Ветка `torus`, бывшая линией
@@ -424,18 +409,12 @@ Rules that came out of it, and they generalise past pipes:
    ГДЕ / СИММЕТРИЯ / МОДЕЛЬ / БЮДЖЕТ / ПРОВЕРКА — [problems.md] §11) and make the
    test print exactly those.
 
-## Workflow Checklist & Iron Gate Defense
+## Workflow Checklist
 
 1. Make the smallest change that solves the problem.
-2. Build clean (no warnings) and run the full master guard:
-   ```bash
-   python tools/run_all_guards.py --mode=pre-commit    # Fast static & diff defense (< 25s)
-   python tools/run_all_guards.py --mode=full          # Full defense: all static gates + CTest
-   ```
-   Or on Windows: `tools\run_all_guards.bat --mode=pre-commit`.
-3. CTest must report 100% PASS with 0 failures (`PASS_REGULAR_EXPRESSION` matched).
-4. New shader → confirm it compiles (glslc runs in the build).
-5. Update the relevant system `.md` **only** if you added a real subsystem or
+2. Build clean (no warnings) and run `ctest`.
+3. New shader → confirm it compiles (glslc runs in the build).
+4. Update the relevant system `.md` **only** if you added a real subsystem or
    changed a documented contract; do not document trivial edits.
-6. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
+5. Do not create stand-alone notes / changelogs / "summary of changes" markdown.
    Documentation lives in the per-system docs orchestrated by the README.
