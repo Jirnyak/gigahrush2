@@ -61,75 +61,20 @@ int cell_dist_l1(int ax, int ay, int az, int bx, int by, int bz) {
            std::abs(wrap_delta(az, bz, kMacroDim));
 }
 
-// Вклад Pickup'ов на полу в supply комнаты, вычитаемый при выборе цели в
-// place_errand_step: serve не может изъять пикап (serve.cpp:pickup_offer) и
-// вычитает его из place_points, поэтому place_pick без вычета звал бы в комнату
-// с одними пикапами и ставил бы туда тело на вечный отказ NoPlace.
-struct RoomPickupAdj {
-    RoomId room = kNoRoom;
-    std::int32_t offer[kVerbCount] = {};
-};
-
-void collect_room_pickups(Registry& reg, const FloorRooms& fr, LayerId layer,
-                          std::vector<RoomPickupAdj>& out) {
-    out.clear();
-    if (fr.roomAt.empty()) return;
-    for (auto [e, p, t] : reg.view<const Pickup, const Transform>().each()) {
-        if (t.layer != layer) continue;
-        if (p.item == kInvalidItem || p.count == 0 || !item_valid(p.item))
-            continue;
-        const RoomId rm = room_at_pos(fr, t.pos);
-        if (rm == kNoRoom) continue;
-        std::size_t idx = out.size();
-        for (std::size_t i = 0; i < out.size(); ++i) {
-            if (out[i].room == rm) {
-                idx = i;
-                break;
-            }
-        }
-        if (idx == out.size()) {
-            RoomPickupAdj adj;
-            adj.room = rm;
-            out.push_back(adj);
-        }
-        const auto& vec = kItemVerbs[p.item - 1];
-        for (std::size_t v = 0; v < kVerbCount; ++v) {
-            out[idx].offer[v] += static_cast<std::int32_t>(vec[v]) *
-                                 static_cast<std::int32_t>(p.count);
-        }
-    }
-    if (out.size() > 1u) {
-        std::sort(out.begin(), out.end(),
-                  [](const RoomPickupAdj& a, const RoomPickupAdj& b) {
-                      return a.room < b.room;
-                  });
-    }
-}
-
-const std::int32_t* lookup_pickup_adj(const std::vector<RoomPickupAdj>* adj,
-                                      RoomId id) {
-    if (adj == nullptr || adj->empty() || id == kNoRoom) return nullptr;
-    auto it = std::lower_bound(
-        adj->begin(), adj->end(), id,
-        [](const RoomPickupAdj& entry, RoomId key) { return entry.room < key; });
-    if (it == adj->end() || it->room != id) return nullptr;
-    return it->offer;
-}
-
 std::int32_t place_interest_adj(std::span<const std::int16_t, kVerbCount> decl,
                                 std::span<const std::int32_t, kVerbCount> sup,
                                 const DemandE3 demand[kVerbCount],
-                                const std::int32_t* pickupSub, VerbId* topVerb) {
+                                VerbId* topVerb) {
     std::int64_t acc = 0;
     std::int64_t top = 0;
     VerbId topV = static_cast<VerbId>(kVerbCount);
     for (std::size_t v = 0; v < kVerbCount; ++v) {
-        std::int64_t offer =
+        // ПРЕДЛОЖЕНИЕ = объявлено + оснащение/запас, одним вектором (S12.4:
+        // «K чисел на комнату — всё предложение целиком»). Пикапы на полу в нём
+        // остаются: решение жителя стоит на `place_offer` с ними, и «разойтись с
+        // place_interest ему нельзя» (serve.cpp, закон 2026-11-14).
+        const std::int64_t offer =
             static_cast<std::int64_t>(decl[v]) + static_cast<std::int64_t>(sup[v]);
-        if (pickupSub != nullptr) {
-            offer -= static_cast<std::int64_t>(pickupSub[v]);
-            if (offer < 0) offer = 0;
-        }
         const std::int64_t term = static_cast<std::int64_t>(demand[v]) * offer;
         acc += term;
         if (term > top) {
@@ -309,12 +254,12 @@ std::int32_t place_interest(const FloorRooms& fr, RoomId id,
                             const DemandE3 demand[kVerbCount],
                             VerbId* topVerb) {
     return place_interest_adj(fr.room_declared(id), fr.room_supply(id), demand,
-                              nullptr, topVerb);
+                              topVerb);
 }
 
 std::int32_t place_interest(const Room& r, const DemandE3 demand[kVerbCount],
                             VerbId* topVerb) {
-    return place_interest_adj(r.declared, r.supply, demand, nullptr, topVerb);
+    return place_interest_adj(r.declared, r.supply, demand, topVerb);
 }
 
 int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
@@ -339,7 +284,7 @@ int place_target_cell(const FloorRooms& fr, RoomId id, int cx, int cy, int cz,
             const RoomBox& box = fr.boxes[bi];
             ox = wrap_macro(box.x + box.sx / 2);
             oy = wrap_macro(box.y + box.sy / 2);
-            oz = wrap_macro(box.z);
+            oz = wrap_macro(box.z + box.sz / 2); // без якорей — центр бокса (без Z-up)
         }
         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
         if (best < 0 || d < best) {
@@ -372,7 +317,7 @@ int place_target_cell(const FloorRooms& fr, const Room& r, int cx, int cy, int c
             const RoomBox& box = fr.boxes[bi];
             ox = wrap_macro(box.x + box.sx / 2);
             oy = wrap_macro(box.y + box.sy / 2);
-            oz = wrap_macro(box.z);
+            oz = wrap_macro(box.z + box.sz / 2); // без якорей — центр бокса (без Z-up)
         }
         const int d = cell_dist_l1(cx, cy, cz, ox, oy, oz);
         if (best < 0 || d < best) {
@@ -465,8 +410,7 @@ void carried_offer(const Inventory& inv, std::int32_t out[kVerbCount]) {
 namespace {
 
 PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
-                          int cx, int cy, int cz, const std::int32_t* carried,
-                          const std::vector<RoomPickupAdj>* pickupAdj) {
+                          int cx, int cy, int cz, const std::int32_t* carried) {
     PlacePick out;
     if (fr.empty() || fr.bins.empty() || fr.binCeil.empty()) return out;
 
@@ -482,8 +426,7 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
         VerbId hereVerb = static_cast<VerbId>(kVerbCount);
         const std::int32_t hereNet =
             place_interest_adj(fr.room_declared(hereId), fr.room_supply(hereId),
-                               demand, lookup_pickup_adj(pickupAdj, hereId),
-                               &hereVerb) -
+                               demand, &hereVerb) -
             place_crowd_cost(fr, hereId, cx, cy, cz);
         if (hereNet > 0) {
             best += hereNet;
@@ -530,7 +473,6 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
                         const std::int32_t score =
                             place_interest_adj(fr.room_declared(id),
                                                fr.room_supply(id), demand,
-                                               lookup_pickup_adj(pickupAdj, id),
                                                &candVerb) -
                             cost;
                         const bool better =
@@ -558,7 +500,7 @@ PlacePick place_pick_impl(const FloorRooms& fr, const DemandE3 demand[kVerbCount
 
 PlacePick place_pick(const FloorRooms& fr, const DemandE3 demand[kVerbCount],
                      int cx, int cy, int cz, const std::int32_t* carried) {
-    return place_pick_impl(fr, demand, cx, cy, cz, carried, nullptr);
+    return place_pick_impl(fr, demand, cx, cy, cz, carried);
 }
 
 // ---------------------------------------------------------------------------
@@ -602,8 +544,6 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
     // Учёт занятости комнат (У1.7): перед выбором пересчитываем стоящих в
     // комнатах и уже направленных к ним тел, а по ходу цикла добираем бронь.
     rooms_occupants_rebuild(fr, reg, layer);
-    static thread_local std::vector<RoomPickupAdj> pickupAdj;
-    collect_room_pickups(reg, fr, layer, pickupAdj);
 
     // Фрейм гравитации — свойство мира, не тела, и спрашивается ОДНОЙ ДВЕРЬЮ
     // ([world/gravity.h] `steer_frame_of`): здесь стояла дословная копия того
@@ -693,9 +633,18 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
             haveTarget =
                 errand_target_cell(fr, plan.room, zones, grid, gravity,
                                    cx, cy, cz, tx, ty, tz) >= 0;
-            // ПРИБЫЛ = ВНУТРИ ОБЪЯВЛЕННОЙ КОМНАТЫ (или в её целевой клетке при
-            // перекрытии).
+            // ПРИБЫЛ = ВНУТРИ БОКСА (S13.3) или в целевой клетке (перекрытие —
+            // `overlapCells` бывает непустым). ТРЕТЬЕ УСЛОВИЕ — ЗОНА РАЗБИВКИ
+            // (§88/E). С навом по зонам цель ЕСТЬ зона, и дошёл тот, кто в ней
+            // стоит. Разбивка шире объявленного бокса (она впитала коридор между
+            // комнатами), и это не поблажка: предложение и глаголы живут НА ЗОНЕ,
+            // а тело внутри зоны их и получает. Без этого условия поле вело бы
+            // тело до границы зоны, а прибытие ждало бы объявленных клеток — то
+            // есть последнюю ногу пришлось бы идти вслепую, ровно как с остатком
+            // якоря у решётки. (Волна 2026-11-28 сняла условие и вела последнюю
+            // ногу прямым пеленгом — возвращено решением владельца.)
             if (room_at(fr, cx, cy, cz) == plan.room ||
+                zone_of_body(*zones, cx, cy, cz) == plan.room ||
                 (haveTarget && cx == tx && cy == ty && cz == tz)) {
                 ++out.arrived;
                 if (plan.room != room_at(fr, cx, cy, cz))
@@ -704,6 +653,13 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                 plan.verb = static_cast<VerbId>(kVerbCount);
                 plan.nextPickAt = stagger();
                 goalValid = false;
+                // Дошёл — цель снята, и тело падает в ветку «сумма сказала
+                // оставайся» НИЖЕ, то есть прибытие и есть вход в деяние
+                // (S24). Своей ветки у прибытия нет СОЗНАТЕЛЬНО: деяние
+                // вешается на СОСТОЯНИЕ «стою там, где предлагают», а не на
+                // событие прихода, — замер показал, что 375 тел из 379 стоят
+                // в коридорах и никуда не идут, то есть событие прихода
+                // обслуживало бы четыре тела из трёхсот семидесяти девяти.
             } else if (!haveTarget) {
                 ++out.unreachable;
                 room_occupant_add(fr, plan.room, -1);
@@ -730,8 +686,7 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
                                   static_cast<float>(pool.max_hp(id)), demand);
                 std::int32_t carried[kVerbCount];
                 carried_offer(pool.inventory(id), carried);
-                const PlacePick pick = place_pick_impl(
-                    fr, demand, cx, cy, cz, carried, &pickupAdj);
+                const PlacePick pick = place_pick_impl(fr, demand, cx, cy, cz, carried);
                 out.judged += pick.judged;
                 out.bins += pick.bins;
                 plan.nextPickAt = stagger();
@@ -764,59 +719,18 @@ PlaceTick place_errand_step(Registry& reg, NpcPool& pool, FloorRooms& fr,
 
         const RoomId myZone = zone_of_body(*zones, cx, cy, cz);
         if (myZone == kNoRoom) {
+            // Тело стоит там, где по карте путей стоять нельзя (нет
+            // касания): вести его некуда, отдаём вандеру.
             ++out.offnav;
             ++out.idle;
             continue;
         }
+        // КУДА ШАГНУТЬ — ОДНОЙ ДВЕРЬЮ ([game/guide.h] `steer_to_zone`): два
+        // чтения нава, прицел в ЦЕНТР следующей клетки, нормировка. Эти
+        // тридцать строк стояли побайтово одинаково здесь, в `wander.cpp` и в
+        // `ai.cpp`.
         const AABB* box = reg.try_get<AABB>(e);
         const vec3 half = box != nullptr ? box->half : vec3{0.4f, 0.4f, 0.4f};
-        if (myZone == plan.room) {
-            ++out.zoneDistBodies;
-            if (!haveTarget) {
-                haveTarget =
-                    errand_target_cell(fr, plan.room, zones, grid, gravity,
-                                       cx, cy, cz, tx, ty, tz) >= 0;
-            }
-            const vec3 dir =
-                haveTarget
-                    ? steer_tangent(
-                          gf,
-                          wrap_delta_f(tr.pos.x,
-                                       (static_cast<float>(tx) + 0.5f) * kCellSize,
-                                       kWorldExtent),
-                          wrap_delta_f(tr.pos.y,
-                                       (static_cast<float>(ty) + 0.5f) * kCellSize,
-                                       kWorldExtent),
-                          wrap_delta_f(tr.pos.z,
-                                       (static_cast<float>(tz) + 0.5f) * kCellSize,
-                                       kWorldExtent))
-                    : vec3{0.0f, 0.0f, 0.0f};
-            const float d2 = dir.x * dir.x + dir.y * dir.y + dir.z * dir.z;
-            if (d2 <= kSteerMinBearing2) {
-                ++out.unreachable;
-                if (plan.room != room_at(fr, cx, cy, cz))
-                    room_occupant_add(fr, plan.room, -1);
-                plan.room = kNoRoom;
-                plan.nextPickAt = stagger();
-                ++out.idle;
-                continue;
-            }
-            const vec3 unit = dir * (1.0f / std::sqrt(d2));
-            if (steer_off_edge(ground, tr.pos, half, unit)) {
-                ++out.edge;
-                ++out.unreachable;
-                if (plan.room != room_at(fr, cx, cy, cz))
-                    room_occupant_add(fr, plan.room, -1);
-                plan.room = kNoRoom;
-                plan.nextPickAt = stagger();
-                ++out.idle;
-                continue;
-            }
-            ++out.walking;
-            steer_claim(reg, e, tick, SteerRank::Errand,
-                        target_dir(dir, kErrandSpeed));
-            continue;
-        }
         const SteerStep st = steer_to_zone(
             *zones, gf, ground, tr.pos, half, cx, cy, cz, myZone, plan.room);
         // Прибор прогресса: расстояние в ЗОНАХ до цели. Σ по ведомым телам

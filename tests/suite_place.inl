@@ -1567,13 +1567,22 @@ static void test_place_target_anchor_support_and_isotropy() {
     CHECK(ai_init(reg, kLayer) == 1);
 
     ZoneNav zones;
-    arm_zones_errand(zones, 28, static_cast<RoomId>(2), home);
+    // Зона дома начинается с бокса (x = 30): тело в x = 29 стоит в коридоре.
+    // Граница внутри x = 28 сажала бы его в зону цели, а там оно ПРИБЫЛО по
+    // правилу §88/E (дошёл тот, кто стоит в зоне) — и якорь никто бы не спросил.
+    arm_zones_errand(zones, 30, static_cast<RoomId>(2), home);
     w.grid().fill_cell(29, 32, 9, kMatConcrete);
     w.grid().clear_cell(tx, ty, 9); // карв вынес опору прямо под якорем!
     const PlaceTick pt1 = place_errand_step(
         reg, pool, fr, kLayer, 0.0, /*tick=*/1, &w.gravity(), &zones, nullptr,
         nullptr, &w.grid());
     CHECK(pt1.picked == 1u);
+    CHECK(reg.get<ErrandPlan>(walker).room == home);
+    // Цель взята на тике 1; якорь цели спрашивается проверкой прибытия на
+    // следующем тике хода (пеленга последней ноги, который спрашивал его в тот
+    // же тик, больше нет — прибытие снова по зоне, §88/E).
+    (void)place_errand_step(reg, pool, fr, kLayer, 0.0, /*tick=*/2, &w.gravity(),
+                            &zones, nullptr, nullptr, &w.grid());
     CHECK(reg.get<ErrandPlan>(walker).room == home);
     CHECK(fr.boxAnchors[0].valid == 1u);
     const int rx = fr.boxAnchors[0].cx, ry = fr.boxAnchors[0].cy,
@@ -1587,7 +1596,7 @@ static void test_place_target_anchor_support_and_isotropy() {
             w.grid().clear_cell(x, y, 9);
     w.grid().clear_cell(33, 32, 10);
     const PlaceTick ptDead = place_errand_step(
-        reg, pool, fr, kLayer, 10.0, /*tick=*/2, &w.gravity(), &zones, nullptr,
+        reg, pool, fr, kLayer, 10.0, /*tick=*/3, &w.gravity(), &zones, nullptr,
         nullptr, &w.grid());
     CHECK(ptDead.unreachable == 1u);
     CHECK(reg.get<ErrandPlan>(walker).room == kNoRoom);
