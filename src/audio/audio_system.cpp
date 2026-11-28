@@ -129,8 +129,13 @@ void AudioSystem::process_noise_events(const game::NoiseField& noiseField, Layer
 }
 
 void AudioSystem::stop_spatial() {
+    // Только голоса. Курсор «до какого id услышано» НЕ сбрасывается: на паузе
+    // поле шумов заморожено вместе с симом (noise_age живёт в сим-тике), и
+    // сброс в ноль переигрывал при снятии паузы каждый ещё живой шум — выстрел
+    // звучал второй раз. `nextId` монотонен ровно ради таких курсоров
+    // (noise.cpp, noise_clear); заново собранное поле ловит проверка
+    // `nextId <= cursor` в process_noise_events.
     mixer_.clear_spatial_voices();
-    lastProcessedNoiseId_ = 0;
 }
 
 void AudioSystem::update(float dt, const vec3& listenerPos, float listenerYaw, float listenerPitch,
