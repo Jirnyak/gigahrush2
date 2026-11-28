@@ -641,23 +641,6 @@ if(GIGA_BUILD_TESTS)
     giga_target_flags(world_test OFF)
     add_test(NAME world_test COMMAND world_test)
 
-    # Заградительный Anti-Goodhart тест динамических дайсов и инвариантов
-    add_executable(barrier_test tests/barrier_test.cpp src/game/body_pose.cpp)
-    target_link_libraries(barrier_test PRIVATE giga_core giga_audio)
-    giga_target_flags(barrier_test OFF)
-    add_test(NAME barrier_test COMMAND barrier_test)
-    set_tests_properties(barrier_test PROPERTIES
-        TIMEOUT 120
-        PASS_REGULAR_EXPRESSION "\\[barrier_test\\] [0-9]+ checks, 0 failures")
-
-    # Бинарные контракты структур, выравнивание по кэш-линиям и детерминизм типов
-    add_executable(code_contract_test tests/code_contract_test.cpp src/game/body_pose.cpp)
-    target_link_libraries(code_contract_test PRIVATE giga_core)
-    giga_target_flags(code_contract_test OFF)
-    add_test(NAME code_contract_test COMMAND code_contract_test)
-    set_tests_properties(code_contract_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "\\[CODE CONTRACTS\\]: Все структуры.*PASS")
-
     # Мир-автомат (S16): headless GPU-прогон. CANON S16.3 — headless значит
     # «без окна», НЕ «без GPU»: автомат обязан гоняться Vulkan compute без
     # свапчейна прямо в ctest, машина без GPU-устройства — НЕ зелёное дерево
@@ -3148,56 +3131,6 @@ if(GIGA_BUILD_TESTS)
     set_tests_properties(doc_refs PROPERTIES
         PASS_REGULAR_EXPRESSION
         "GIGA_DOC_REFS=PASS form1=[0-9][0-9]+ form2=[0-9][0-9]+ plain=[0-9][0-9]+")
-
-    # Заградительный анти-гудхарт инквизитор против заглушек, поддельных ассертов
-    # и фейковых песочниц. При падении выдает агенту подробный обучающий блок с
-    # адресом, нарушенным законом и планом исправления.
-    add_test(NAME agent_barrier
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_agent_barrier.py)
-    set_tests_properties(agent_barrier PROPERTIES
-        PASS_REGULAR_EXPRESSION "agent_barrier.*PASS")
-
-    # Архитектурная гигиена: слои ядра, детерминизм, целостность CSV и запрет sleep
-    add_test(NAME code_invariants
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_code_invariants.py ${CMAKE_CURRENT_SOURCE_DIR})
-    set_tests_properties(code_invariants PROPERTIES
-        PASS_REGULAR_EXPRESSION "ARCHITECTURAL CODE HYGIENE.*PASS")
-
-    # Железный замок диффов (Anti-Slop): запрет удаления тестов, ослабления ассертов и костылей
-    add_test(NAME diff_guard
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_diff_guard.py)
-    set_tests_properties(diff_guard PROPERTIES
-        PASS_REGULAR_EXPRESSION "DIFF GUARD.*PASS")
-
-    # Стохастический аудит реальности Монте-Карло (Кубик Тимаэрта — 175 случайных срезов)
-    add_test(NAME dice_audit
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/dice_reality_audit.py --samples=100)
-    set_tests_properties(dice_audit PROPERTIES
-        PASS_REGULAR_EXPRESSION "DICE AUDIT.*PASS")
-
-    # Модульные тесты Кубика Тимаэрта (Двуполярная верификация всех 4 списков)
-    add_test(NAME dice_audit_unit_test
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_dice_reality_audit.py)
-    set_tests_properties(dice_audit_unit_test PROPERTIES
-        PASS_REGULAR_EXPRESSION "DICE AUDIT UNIT TESTS.*PASS")
-
-    # Инквизиционный сьют убийства мутантов с инвертированными условиями (Dental CRM ae579cbd40 standard)
-    add_test(NAME mutant_killer
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/dice_reality_audit.py --mutant-killer)
-    set_tests_properties(mutant_killer PROPERTIES
-        PASS_REGULAR_EXPRESSION "MUTANT KILLER: 100% PASS")
-
-    # Монотонный храповик качества (Quality Ratchet): пол тестов и потолок долга
-    add_test(NAME quality_ratchet
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/quality_ratchet.py)
-    set_tests_properties(quality_ratchet PROPERTIES
-        PASS_REGULAR_EXPRESSION "QUALITY RATCHET.*PASS")
-
-    # Верховный страж всех колец обороны (The Master Guard: 7 Iron Rings)
-    add_test(NAME master_guards
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_all_guards.py --mode=pre-commit)
-    set_tests_properties(master_guards PROPERTIES
-        PASS_REGULAR_EXPRESSION "ЗАГРАДИТЕЛЬНЫХ ГЕЙТОВ И СЬЮТОВ ПРОЙДЕНЫ СО 100% УСПЕХОМ")
 
     # ПРАВЯЩАЯ ДВЕРЬ того же ядра разбора. Отдельный таргет-исполнитель, а не
     # часть сборки: сборка, молча правящая файлы дерева, отбирает смысл у

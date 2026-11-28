@@ -112,8 +112,9 @@ def spawn_weight(row, i):
 
 
 def cpp_string(s):
-    # Preserve explicit \n escape sequences authored in single-line CSV cells
-    # (check_code_invariants.py reads CSV line-by-line) as real C++ newlines.
+    # A CSV row stays ONE physical line, so a multi-line text (a document's
+    # paragraphs) is authored as the two-char escape `\n` in the cell; emit it,
+    # and any real newline, as a C++ `\n`.
     marker = "\x00"
     s = s.replace("\r\n", "\n").replace("\n", marker).replace("\\n", marker)
     s = s.replace("\\", "\\\\").replace('"', '\\"').replace(marker, "\\n")
