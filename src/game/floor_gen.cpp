@@ -327,10 +327,10 @@ constexpr ModuleVersionRow kModuleGenVersions[] = {
     // снимок материей, и прежний блок 2 × 2 × 4 м новая форма при открытии
     // сняла бы не целиком. Этажи без дверей модуля (блейм, хрущи) не подняты.
     {FloorKind::Residential, 3}, // padic геометрия
-    {FloorKind::Commercial,  4}, // PadicTheme (витрины, материалы, проёмы)
-    {FloorKind::Industrial,  4}, // PadicTheme (колонны, металл/бетон)
-    {FloorKind::Derelict,    4}, // PadicTheme (проломы, щебень, дыры)
-    {FloorKind::Padic,       4}, // PadicTheme (лино/паркет, дыры)
+    {FloorKind::Commercial,  3},
+    {FloorKind::Industrial,  3},
+    {FloorKind::Derelict,    3},
+    {FloorKind::Padic,       3},
     {FloorKind::Blame,       2},
     {FloorKind::Khrushi,     2},
 };

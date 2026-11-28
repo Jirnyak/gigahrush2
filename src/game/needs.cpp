@@ -6,9 +6,6 @@
 #include "ecs/components.h"
 #include "game/embody.h"     // NpcRef
 #include "game/inventory.h"
-#include "game/room.h"        // FloorRooms, Room, room_of, kRoomTagHermetic
-#include "game/room_supply.h" // room_at_pos
-#include "game/serve.h"       // serve_holding
 #include "game/witness.h"    // deed_publish — невольный слив = деяние (S19)
 #include "world/destruct.h"  // set_sub_material / sub_material_at — моча как материя
 #include "world/materials.h" // kMatUrine; воздух — kCellAir (macro_grid.h)
@@ -212,8 +209,7 @@ int relief_urine(World& w, const vec3& pos, int count,
 NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                      AiMemory* mem, double now, EventBus* bus,
                      std::uint64_t tick, World* world,
-                     std::vector<std::uint32_t>* excreted,
-                     const FloorRooms* rooms) {
+                     std::vector<std::uint32_t>* excreted) {
     NeedsTick out;
     if (dt <= 0.0f) return out;
 
@@ -271,21 +267,10 @@ NeedsTick needs_step(Registry& reg, NpcPool& pool, LayerId layer, float dt,
                 relief_urine(*world, tr.pos, kReliefUrineAtoms, *excreted));
         ++out.bodies;
 
-        // АМБИЕНТНОЕ ВОССТАНОВЛЕНИЕ В ГЕРМОУКРЫТИИ (kRoomTagHermetic) И СЛУЖБА ДЕЯНИЯ
-        const RoomId rid = (rooms != nullptr) ? room_at_pos(*rooms, tr.pos) : kNoRoom;
-        const bool inHermetic =
-            (rooms != nullptr && (rooms->room_tags(rid) & kRoomTagHermetic) != 0);
-        const bool holdingDeed = serve_holding(reg, e, tick);
-        if (inHermetic || holdingDeed) {
-            ++out.recovering;
-            if (inHermetic) {
-                // Пассивный отдых: компенсирует усталость и плавно пополняет сон
-                n.sleep = clamp_need(n.sleep + kHermeticSleepAmbientPerSec * dt);
-                // Стерильная стабилизация раненых без расхода медикаментов
-                if (pool.hp(id) < pool.max_hp(id))
-                    n.hpBank += kHermeticHealAmbientPerSec * dt;
-            }
-        }
+        // АМБИЕНТНАЯ РЕГЕНЕРАЦИЯ ПО ВИДУ КОМНАТЫ УМЕРЛА (rooms-object F,
+        // S12.2: вида нет; S12.5: потребление РЕАЛЬНОЕ — NPC берёт предмет и
+        // ест его). Возвращает agent-goals: цель «есть» ведёт к комнате с
+        // предложением, изъятие предмета из контейнера двигает нужду.
 
         // HEAL BANK SPILL — the mirror of the hpDebt drain below, and deliberately
         // NOT behind that section's `rate <= 0` early-out: a body healing in a

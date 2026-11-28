@@ -2790,14 +2790,17 @@ if(GIGA_BUILD_TESTS)
         #     света (round-trip, ключ, порча, MISS/HIT);
         #   - `suite_rooms_object.inl` (+17): `Room::owner` из `FloorSpec::factionMix`;
         #   - `suite_rpg.inl` + `suite_utilai.inl` (+63): `capability` + `Perception`.
-        # 245294 -> 245305 (+11, 2026-11-28):
-        #   - `suite_needs.inl` (+5): `recovering_ambient_hermetic()` (kRoomTagHermetic + serve_holding);
-        #   - `game_test.cpp` (+6): `test_floor_gen()` дифференциация материалов и геометрии через `PadicTheme`.
+        # 245294 -> 245305 (+11, 2026-11-28, 3a9e5465):
+        #   - `suite_perceive.inl` (+3): фикс дефекта 3b — нулевой/отрицательный `hearingMult` в `noise.cpp`;
+        #   - `suite_utilai.inl` (+8): проброс `Senses::heardSev -> Perception::gunfire` и прямое бегство от видимого врага (`sen->foe`).
+        #   (+11 коммита 6331faae — гермо-реген и PadicTheme — сняты его откатом:
+        #   облик этажа — модуль, не тема; лечение — частный случай единой системы эффектов.)
         # 245327 -> 245435 (+108, 2026-11-28):
         #   - Increment D (`RoomTargetAnchor`, `rooms_bake_anchors`, `Settlement::byOwner`, `cell_stand_slot_eval` Grade 1/2):
         #     `suite_settle.inl` (faction ownership + exit clearance across 5 FloorKinds + trap/hole gates)
         #     and `suite_place.inl` (`test_place_target_anchor_support_and_isotropy`).
-        PASS_REGULAR_EXPRESSION "game_test: 245435 checks, 0 failures")
+        # 245435 -> 245424 (−11, откат 6331faae поверх C/D: −5 гермо-реген, −6 различение видов этажей).
+        PASS_REGULAR_EXPRESSION "game_test: 245424 checks, 0 failures")
 
     # Opaque-box E2E scenario suite (форк ce066615, переавторено под наши
     # сигнатуры).

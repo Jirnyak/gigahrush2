@@ -5,7 +5,6 @@
 // quests, events and interactive objects register from THIS file, so deleting
 // the folder deletes the floor cleanly and nothing else has to know.
 #include "game/floors/padic/padic.h"
-#include "game/floors/padic/padic_theme.h"
 #include "game/floor_catalog.h"
 #include "game/prop_system.h"
 #include "game/room.h" // FloorRooms/Room — объявленные глаголы BSP-листьев
@@ -25,6 +24,45 @@ namespace giga::game {
 bool register_padic_floor(FloorCatalog& cat) {
     return cat.claim(kPadicFloorNumber, {"padic", FloorKind::Padic});
 }
+
+namespace {
+
+// ---- МЕБЕЛЬ ПАДИКА — СТРОКИ МОДУЛЯ ---------------------------------------
+// Тот же список, что у хрущей, и он ПОВТОРЁН НАМЕРЕННО, а не вынесен: папка
+// есть модуль ([padic.h] — «modularity beats DRY on purpose»), и смысл этого
+// закона ровно в том, чтобы падик мог обеднеть или обрасти своей мебелью, не
+// задев хрущи. Общего здесь — предикат `prop_fits_room` (механика сверки
+// глаголов), а не содержимое списка.
+//
+// Что выходит на объявлениях `padic_rooms` (считано, не предположено):
+//   жилая   (sleep 30)  — койка (sleep 17)
+//   санузел (toilet 20, drink 10) — унитаз (toilet 19), раковина (drink 10)
+//   ниша    (eat 12)    — плита (eat 12) И стол (eat 4): у падика лист BSP
+//                         никогда не уже minSpan, а зона яруса — три клетки,
+//                         то есть мест заведомо больше одного (у хрущей та же
+//                         пара не влезает — там кухня одноклеточная)
+//   полоса  (store 15)  — ничего из этого списка
+//
+// ЯЩИК (store 20) здесь НЕ УЧАСТВУЕТ, и причина не в пороге: до
+// `prop_fits_room` он не доходит, его просто нет в списке. Тару сеет
+// `spawn_floor_containers`, и она глаголослепа (комната — равномерный хеш по
+// всему списку, `declared` не спрашивается) — это её долг, не этого прохода.
+constexpr PropId kPadicFurniture[] = {
+    PropId::BedCot,
+    PropId::ToiletPan,
+    PropId::KitchenStove,
+    // РАКОВИНА (2026-11-14): питьё у места теперь — прицелом на вещь (CANON
+    // S27.1), а вода была объявлена у комнаты без предмета. Встаёт по глаголу
+    // туда, где комната ЖИВЁТ питьём (ниша 14, санузел 10 — `prop_fits_room`),
+    // ПОСЛЕ плиты: в тесной комнате порядок списка — приоритет.
+    PropId::Sink,
+    PropId::KitchenTable,
+};
+static_assert(std::size(kPadicFurniture) <= kMaxStandSpots,
+              "строк мебели больше, чем мест отдаёт room_stand_spots за один "
+              "обход комнаты: либо режь список, либо поднимай kMaxStandSpots");
+
+} // namespace
 
 std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
     std::uint32_t count = 0;
@@ -108,7 +146,6 @@ std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
     // Commercial, Industrial, Derelict и Padic дispatch'атся в эту геометрию,
     // значит и в эту расстановку. Заброшенный ярус с койкой и унитазом — это и
     // есть руина жилого фонда; ПУСТАЯ руина читалась бы декорацией.
-    const PadicTheme& theme = padic_theme_for(ctx.spec.kind);
     const std::uint32_t salt = ctx.seed ^ 0x70616469u; // 'padi'
     StandSpot spots[kMaxStandSpots];
     std::uint32_t furnished = 0;
@@ -120,17 +157,15 @@ std::uint32_t padic_place(const FloorPlaceCtx& ctx) {
         const RoomId id = static_cast<RoomId>(i + 1); // RoomId = индекс + 1
         const auto declared = ctx.rooms.room_declared(id);
         int want = 0;
-        for (std::size_t fi = 0; fi < theme.furnitureCount; ++fi)
-            if (prop_fits_room(theme.furniture[fi], declared)) ++want;
+        for (PropId p : kPadicFurniture)
+            if (prop_fits_room(p, declared)) ++want;
         if (want == 0) continue;
-        if (want > kMaxStandSpots) want = kMaxStandSpots;
         wanted += static_cast<std::uint32_t>(want);
         const int n = room_stand_spots(world, ctx.rooms, id, salt, spots, want);
         if (n == 0) ++noSpot;
         int si = 0;
-        for (std::size_t fi = 0; fi < theme.furnitureCount; ++fi) {
+        for (PropId p : kPadicFurniture) {
             if (si >= n) break; // мест меньше, чем вещей — честно, не падение
-            const PropId p = theme.furniture[fi];
             if (!prop_fits_room(p, declared)) continue;
             const StandSpot& s = spots[si];
             if (place_prop_standing(reg, world, layer, s.cx, s.cy, s.cz,
